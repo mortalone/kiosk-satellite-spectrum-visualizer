@@ -1,8 +1,9 @@
-## Spectrum Visualizer Overlay 0.2.4
+## Spectrum Visualizer Overlay 0.2.5
 
-- Fixes installation/update failure: **Too many settings or commands**.
-- Keeps the manifest at Kiosk Satellite's hard limit of 20 settings.
-- Collapses Home Assistant/time visibility into one optional **Visibility rule** field.
-- Rule format: `entity|condition|value`.
-- Supports Active, Inactive, State equals/not equals, Numeric above/below/between, and Time between.
-- Keeps Digital / Sendspin capture, capture method selection, source diagnostics, layout, spectrum and color controls.
+- Fixes Digital / Sendspin showing no spectrum while Animated mode works.
+- Replaces callback-only Android Visualizer capture with active `getWaveForm()` polling.
+- Polls the live Sendspin AudioTrack at the configured refresh rate and performs the FFT in the plugin.
+- Auto still falls back to the Android output mix if the Sendspin session cannot be polled.
+- Adds poll result and sampling rate to **Report digital source status**.
+- Uses normalized Visualizer scaling, suitable for music visualization.
+- Keeps the manifest at the 20-setting Kiosk Satellite limit.
