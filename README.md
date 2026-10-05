@@ -86,3 +86,13 @@ chosen. A previous forced capture method must be selected using the combined
 source field; existing Digital / Sendspin now means Auto.
 
 Microphone mode can compete with wake-word capture on some Android builds.
+
+## 0.2.10: Party audio feed
+
+While full-screen Party Mode has an effect selected, the existing analyzer
+keeps running without its normal spectrum/debug overlay. It shares bounded
+frames inside Kiosk Satellite with Now Playing 0.2.2. Source, gain and refresh
+rate remain controlled here; Party controls its own visual style. When Party
+closes, screensaver/visibility rules apply again. The lease is checked even
+with debug switched off, so a crashed Party view cannot keep capture active
+forever. Animated data is marked as demo.

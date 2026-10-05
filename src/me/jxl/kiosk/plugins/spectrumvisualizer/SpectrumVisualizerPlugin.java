@@ -89,6 +89,14 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     private final Set<String> entitySubscriptions = new HashSet<>();
 
     private SpectrumView spectrumView;
+    private volatile boolean partyAnalyzerOnly;
+    private final Runnable analyzerRetry = this::updatePresentation;
+    private final Runnable partyWatchdog = new Runnable() {
+        @Override public void run() {
+            if (host == null) return;
+            updatePresentation();
+        }
+    };
     private volatile boolean analyzerRunning;
     private Thread analyzerThread;
     private AudioRecord audioRecord;
@@ -237,6 +245,8 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             try { application.unregisterActivityLifecycleCallbacks(lifecycleCallbacks); } catch (Throwable ignored) {}
         }
         stopAnalyzer();
+        main.removeCallbacks(analyzerRetry);
+        main.removeCallbacks(partyWatchdog);
         main.removeCallbacks(debugTick);
         main.post(() -> {
             hideVisualizer();
@@ -427,6 +437,22 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     }
 
     private void updatePresentation() {
+        main.removeCallbacks(partyWatchdog);
+        if (partyAudioRequested()) {
+            if (!partyAnalyzerOnly) {
+                removeOverlayView(spectrumView);
+                partyAnalyzerOnly = true;
+            }
+            if (spectrumView == null) spectrumView = new SpectrumView(context);
+            startAnalyzer();
+            main.postDelayed(partyWatchdog, 1000);
+            return;
+        }
+        if (partyAnalyzerOnly) {
+            hideVisualizer();
+            partyAnalyzerOnly = false;
+        }
+        if (partyFullscreenActive()) main.postDelayed(partyWatchdog, 1000);
         if (!overlayActive()) {
             hideVisualizer();
             return;
@@ -477,6 +503,11 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
 
     private void startAnalyzer() {
         if (analyzerRunning || spectrumView == null) return;
+        if (analyzerThread != null && analyzerThread.isAlive()) {
+            main.removeCallbacks(analyzerRetry);
+            main.postDelayed(analyzerRetry, 100);
+            return;
+        }
         analyzerRunning = true;
         analyzerThread = new Thread(() -> {
             if ("Microphone".equals(source)) {
@@ -486,7 +517,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             } else {
                 runAnimatedAnalyzer();
             }
-            analyzerRunning = false;
+            if (analyzerThread == Thread.currentThread()) analyzerRunning = false;
         }, "spectrum-visualizer");
         analyzerThread.setDaemon(true);
         analyzerThread.start();
@@ -502,7 +533,6 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         }
         releaseDigitalVisualizer();
         Thread thread = analyzerThread;
-        analyzerThread = null;
         if (thread != null) thread.interrupt();
     }
 
@@ -518,11 +548,9 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 bars[i] = clamp01((float) wave);
             }
             phase += 0.22;
-            SpectrumView view = spectrumView;
-            if (view != null) {
-                view.setLevels(bars);
-                view.postInvalidate();
-            }
+            float[] wave = new float[128];
+            for (int i = 0; i < wave.length; i++) wave[i] = (float) (0.6 * Math.sin(phase + i * 0.22) + 0.2 * Math.sin(phase * 0.6 + i * 0.51));
+            publishFrame(bars, wave, true);
             sleep(Math.max(33L, 1000L / Math.max(1, fps)));
         }
     }
@@ -686,11 +714,9 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
 
             float[] bars = waveformSpectrumBars(
                     digitalWaveform, samplingRate, barCount, gain);
-            SpectrumView view = spectrumView;
-            if (view != null) {
-                view.setLevels(bars);
-                view.postInvalidate();
-            }
+            float[] wave = new float[Math.min(128, digitalWaveform.length)];
+            for (int i = 0; i < wave.length; i++) wave[i] = ((digitalWaveform[i * digitalWaveform.length / wave.length] & 0xff) - 128) / 128f;
+            publishFrame(bars, wave, false);
             return true;
         } catch (Throwable error) {
             digitalLastPollResult = Integer.MIN_VALUE + 1;
@@ -700,11 +726,24 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     }
 
     private void zeroDigitalBars() {
+        publishFrame(new float[barCount], new float[0], false);
+    }
+
+    private void publishFrame(float[] bars, float[] waveform, boolean demo) {
         SpectrumView view = spectrumView;
-        if (view != null) {
-            view.setLevels(new float[barCount]);
+        if (view != null && !partyAnalyzerOnly) {
+            view.setLevels(bars);
             view.postInvalidate();
         }
+        Context app = context;
+        if (app == null || !partyAnalyzerOnly || !analyzerRunning) return;
+        Intent frame = new Intent("me.jxl.kiosk.plugins.PARTY_AUDIO_FRAME").setPackage(app.getPackageName());
+        frame.putExtra("bands", bars);
+        frame.putExtra("waveform", waveform);
+        frame.putExtra("fps", fps);
+        frame.putExtra("demo", demo);
+        frame.putExtra("at", android.os.SystemClock.elapsedRealtime());
+        try { app.sendBroadcast(frame); } catch (Throwable ignored) {}
     }
 
     private String digitalStatusText() {
@@ -729,7 +768,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                         0L,
                         android.os.SystemClock.elapsedRealtime() -
                                 digitalLastFrameAtMs);
-        return "Spectrum 0.2.9 | " + source + " | " + digitalCapture + " | " + fps + " FPS | gain=" + gain +
+        return "Spectrum 0.2.10 | " + source + " | " + digitalCapture + " | " + fps + " FPS | gain=" + gain +
                     "\n" + trackInfo +
                     "; attachedSession=" + digitalAudioSessionId +
                     "; systemMix=" + digitalUsingSystemMix +
@@ -1096,11 +1135,9 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 fft(real, imag);
 
                 float[] bars = spectrumBars(real, imag, sampleRate, barCount, gain);
-                SpectrumView view = spectrumView;
-                if (view != null) {
-                    view.setLevels(bars);
-                    view.postInvalidate();
-                }
+                float[] wave = new float[Math.min(128, pcm.length)];
+                for (int i = 0; i < wave.length; i++) wave[i] = pcm[i * pcm.length / wave.length] / 32768f;
+                publishFrame(bars, wave, false);
                 sleep(Math.max(33L, 1000L / Math.max(1, fps)));
             }
             return true;
@@ -1277,6 +1314,11 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         android.content.SharedPreferences presentation = context.getSharedPreferences("now_playing_presentation", Context.MODE_PRIVATE);
         return presentation.getBoolean("party_fullscreen", false) &&
                 presentation.getLong("party_until_ms", 0) > System.currentTimeMillis();
+    }
+
+    private boolean partyAudioRequested() {
+        return partyFullscreenActive() && !"off".equals(context.getSharedPreferences(
+                "now_playing_presentation", Context.MODE_PRIVATE).getString("effect", "off"));
     }
 
     private void registerActivityLifecycle() {

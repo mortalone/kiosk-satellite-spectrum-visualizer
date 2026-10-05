@@ -1,7 +1,9 @@
-# Spectrum Visualizer Overlay 0.2.9
+# Spectrum Visualizer 0.2.10
 
-- Temporarily hide both the spectrum and debug panel while Now Playing Overlay's full-screen Party Mode is active.
-- Restore the existing visibility and debug choices when Party Mode closes. Compact Party overlay does not hide the spectrum.
-- Read the shared presentation state on each visibility decision and react immediately to the in-app presentation notification.
+- Supply internal audio frames to full-screen Party effects in Now Playing 0.2.2, keeping one existing analyzer.
+- Continue capture while normal spectrum/debug overlays remain hidden; use existing source, gain and FPS.
+- Include bounded waveform samples and bands; mark animated data as demo.
+- Restore normal visibility after Party exit. Check the presentation lease even when debug is disabled.
+- Wait for the old analyzer thread to finish before restarting, avoiding concurrent captures.
 
-20 settings and 9 commands are unchanged. Requires Now Playing Overlay 0.2.1 for coordinated full-screen presentation.
+Build and audio-discovery tests run in CI. Actual Android capture and Party visuals require kiosk testing.
