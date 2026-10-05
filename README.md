@@ -61,3 +61,24 @@ None of these digital modes uses microphone input.
 
 The plugin also includes **Report digital source status**, which reports the
 discovered AudioTrack, session id and whether capture frames are arriving.
+
+
+## 0.2.4: visibility rules without exceeding Kiosk Satellite's manifest limit
+
+Kiosk Satellite allows at most 20 plugin settings. Visibility is therefore
+configured as one compact rule instead of three separate settings.
+
+Use **Visibility rule (optional)** with:
+
+`entity|condition|value`
+
+Examples:
+
+- `binary_sensor.motion|Active`
+- `binary_sensor.presence|Inactive`
+- `sensor.lux|Numeric below|30`
+- `sensor.temperature|Numeric between|18..24`
+- `media_player.stueetagen|State equals|playing`
+- `time|Time between|22:00-06:00`
+
+Leave the field empty to always allow the visualizer.
