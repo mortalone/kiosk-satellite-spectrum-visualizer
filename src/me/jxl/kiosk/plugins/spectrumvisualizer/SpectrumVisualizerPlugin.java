@@ -95,6 +95,9 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     private volatile int digitalAudioSessionId = -1;
     private volatile long digitalLastFrameAtMs = 0L;
     private volatile boolean digitalUsingSystemMix = false;
+    private volatile int digitalLastPollResult = Integer.MIN_VALUE;
+    private volatile int digitalSamplingRateMilliHz = 0;
+    private byte[] digitalWaveform = new byte[0];
     private String digitalCapture = "Auto";
 
     @Override
@@ -508,8 +511,9 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
      * AudioTrack reflectively and attaches only to its audioSessionId.
      */
     private void runDigitalAnalyzer() {
-        long noFramesSince = android.os.SystemClock.elapsedRealtime();
+        long noSignalSince = android.os.SystemClock.elapsedRealtime();
         int lastReportedSession = Integer.MIN_VALUE;
+        long frameMs = Math.max(33L, 1000L / Math.max(1, fps));
 
         while (analyzerRunning && spectrumView != null) {
             AudioTrack track = resolveSendspinAudioTrack();
@@ -533,51 +537,52 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                             false);
                     lastReportedSession = -1;
                 }
-                sleep(350);
+                sleep(250);
                 continue;
             }
 
             if (digitalVisualizer == null || digitalAudioSessionId != wantedSession) {
                 if (!attachDigitalVisualizer(wantedSession, wantedSession == 0)) {
                     if (!forceSession && wantedSession != 0) {
-                        // Some Android builds expose capture only on output-mix session 0.
-                        // This remains digital device output, never microphone input.
+                        // Some Android builds only expose visualization data on
+                        // the global output mix. This is still digital playback,
+                        // never microphone input.
                         if (!attachDigitalVisualizer(0, true)) {
                             zeroDigitalBars();
-                            sleep(750);
+                            sleep(500);
                             continue;
                         }
                     } else {
                         zeroDigitalBars();
-                        sleep(750);
+                        sleep(500);
                         continue;
                     }
                 }
-                noFramesSince = android.os.SystemClock.elapsedRealtime();
+                noSignalSince = android.os.SystemClock.elapsedRealtime();
                 lastReportedSession = digitalAudioSessionId;
             }
 
+            // Poll getWaveForm() directly. Android documents polling and
+            // callback capture as two separate supported modes; some OEM
+            // builds attach the effect successfully but never dispatch the
+            // callback listener.
+            boolean gotFrame = pollDigitalVisualizer();
             long now = android.os.SystemClock.elapsedRealtime();
-            long last = digitalLastFrameAtMs;
-            if (last == 0L || now - last > 2200L) {
-                // The effect attached successfully but this OEM may not deliver
-                // per-session capture callbacks. Auto mode retries once against
-                // the digital output mix, which is how Android's own visualizers
-                // commonly work on these builds.
-                if ("Auto".equals(digitalCapture) &&
-                        digitalAudioSessionId != 0 &&
-                        now - noFramesSince > 2200L) {
-                    releaseDigitalVisualizer();
-                    if (!attachDigitalVisualizer(0, true)) {
-                        zeroDigitalBars();
-                    }
-                    noFramesSince = now;
+            if (gotFrame) {
+                noSignalSince = now;
+            } else if ("Auto".equals(digitalCapture) &&
+                    digitalAudioSessionId != 0 &&
+                    now - noSignalSince > 1800L) {
+                releaseDigitalVisualizer();
+                if (!attachDigitalVisualizer(0, true)) {
+                    zeroDigitalBars();
                 }
-            } else {
-                noFramesSince = now;
+                noSignalSince = now;
+            } else if (now - noSignalSince > 2500L) {
+                zeroDigitalBars();
             }
 
-            sleep(300);
+            sleep(frameMs);
         }
         releaseDigitalVisualizer();
     }
@@ -592,59 +597,23 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 capture = Math.max(range[0], Math.min(range[1], 1024));
             }
             vis.setCaptureSize(capture);
-            int rate = Math.min(
-                    Visualizer.getMaxCaptureRate(),
-                    Math.max(5000, fps * 1000));
-
-            digitalLastFrameAtMs = 0L;
-            vis.setDataCaptureListener(
-                    new Visualizer.OnDataCaptureListener() {
-                        @Override
-                        public void onWaveFormDataCapture(
-                                Visualizer visualizer,
-                                byte[] waveform,
-                                int samplingRate) {
-                            if (!analyzerRunning ||
-                                    digitalVisualizer != visualizer ||
-                                    waveform == null ||
-                                    waveform.length < 16) return;
-                            digitalLastFrameAtMs =
-                                    android.os.SystemClock.elapsedRealtime();
-                            float[] bars = waveformSpectrumBars(
-                                    waveform, samplingRate, barCount, gain);
-                            SpectrumView view = spectrumView;
-                            if (view != null) {
-                                view.setLevels(bars);
-                                view.postInvalidate();
-                            }
-                        }
-
-                        @Override
-                        public void onFftDataCapture(
-                                Visualizer visualizer,
-                                byte[] fft,
-                                int samplingRate) {
-                            // Waveform capture is deliberately used instead of
-                            // Android's FFT callback. Several Android/Lineage
-                            // audio HALs expose session waveform data but never
-                            // deliver FFT callbacks. We run the FFT ourselves.
-                        }
-                    },
-                    rate,
-                    true,
-                    false);
+            vis.setScalingMode(Visualizer.SCALING_MODE_NORMALIZED);
             vis.setEnabled(true);
 
             digitalVisualizer = vis;
             digitalAudioSessionId = sessionId;
             digitalUsingSystemMix = systemMix;
+            digitalLastFrameAtMs = 0L;
+            digitalLastPollResult = Integer.MIN_VALUE;
+            digitalSamplingRateMilliHz = 0;
+            digitalWaveform = new byte[capture];
 
             if (host != null) {
                 host.status(
                         systemMix
-                                ? "Digital spectrum attached to Android output mix."
+                                ? "Digital spectrum attached to Android output mix (polling)."
                                 : "Digital spectrum attached to Sendspin audio session " +
-                                    sessionId + ".",
+                                    sessionId + " (polling).",
                         false);
             }
             return true;
@@ -656,6 +625,38 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                                 sessionId + ": " + safeMessage(error),
                         true);
             }
+            return false;
+        }
+    }
+
+    private boolean pollDigitalVisualizer() {
+        Visualizer vis = digitalVisualizer;
+        if (vis == null || !analyzerRunning) return false;
+        try {
+            int capture = vis.getCaptureSize();
+            if (capture <= 0) return false;
+            if (digitalWaveform == null || digitalWaveform.length < capture) {
+                digitalWaveform = new byte[capture];
+            }
+
+            int result = vis.getWaveForm(digitalWaveform);
+            digitalLastPollResult = result;
+            if (result != Visualizer.SUCCESS) return false;
+
+            int samplingRate = vis.getSamplingRate();
+            digitalSamplingRateMilliHz = samplingRate;
+            digitalLastFrameAtMs = android.os.SystemClock.elapsedRealtime();
+
+            float[] bars = waveformSpectrumBars(
+                    digitalWaveform, samplingRate, barCount, gain);
+            SpectrumView view = spectrumView;
+            if (view != null) {
+                view.setLevels(bars);
+                view.postInvalidate();
+            }
+            return true;
+        } catch (Throwable error) {
+            digitalLastPollResult = Integer.MIN_VALUE + 1;
             return false;
         }
     }
@@ -691,6 +692,8 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                     "Digital status: " + trackInfo +
                     "; attachedSession=" + digitalAudioSessionId +
                     "; systemMix=" + digitalUsingSystemMix +
+                    "; pollResult=" + digitalLastPollResult +
+                    "; sampleRateMilliHz=" + digitalSamplingRateMilliHz +
                     "; lastFrameAgeMs=" + age;
             host.status(status, false);
             // Keep the result visible in Remote Admin Overview as well as on
@@ -829,6 +832,9 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         digitalVisualizer = null;
         digitalAudioSessionId = -1;
         digitalUsingSystemMix = false;
+        digitalLastPollResult = Integer.MIN_VALUE;
+        digitalSamplingRateMilliHz = 0;
+        digitalWaveform = new byte[0];
         if (vis != null) {
             try { vis.setEnabled(false); } catch (Throwable ignored) {}
             try { vis.release(); } catch (Throwable ignored) {}
