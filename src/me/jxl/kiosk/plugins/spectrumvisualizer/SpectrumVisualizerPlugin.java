@@ -345,6 +345,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     }
 
     private boolean overlayActive() {
+        if (partyFullscreenActive()) return false;
         boolean kiosk = showOnKiosk && kioskScreensaverActive &&
                 !"black".equals(kioskScreensaverView) &&
                 !"blank".equals(kioskScreensaverView);
@@ -728,7 +729,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                         0L,
                         android.os.SystemClock.elapsedRealtime() -
                                 digitalLastFrameAtMs);
-        return "Spectrum 0.2.8 | " + source + " | " + digitalCapture + " | " + fps + " FPS | gain=" + gain +
+        return "Spectrum 0.2.9 | " + source + " | " + digitalCapture + " | " + fps + " FPS | gain=" + gain +
                     "\n" + trackInfo +
                     "; attachedSession=" + digitalAudioSessionId +
                     "; systemMix=" + digitalUsingSystemMix +
@@ -781,6 +782,9 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
 
     private void refreshDebugOverlay() {
         if (context == null || host == null) return;
+        if (partyFullscreenActive()) {
+            removeOverlayView(debugView); debugView = null; return;
+        }
         try {
             if (debugView == null) {
                 TextView view = new TextView(context);
@@ -1244,7 +1248,10 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     private void registerDreamReceiver() {
         dreamReceiver = new BroadcastReceiver() {
             @Override public void onReceive(Context ignored, Intent intent) {
-                if (Intent.ACTION_DREAMING_STARTED.equals(intent.getAction())) {
+                if ("me.jxl.kiosk.plugins.PARTY_PRESENTATION_CHANGED".equals(intent.getAction())) {
+                    updatePresentation();
+                    restartDebugOverlay();
+                } else if (Intent.ACTION_DREAMING_STARTED.equals(intent.getAction())) {
                     dreaming = true;
                     updatePresentation();
                 } else if (Intent.ACTION_DREAMING_STOPPED.equals(intent.getAction())) {
@@ -1255,6 +1262,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             }
         };
         IntentFilter filter = new IntentFilter();
+        filter.addAction("me.jxl.kiosk.plugins.PARTY_PRESENTATION_CHANGED");
         filter.addAction(Intent.ACTION_DREAMING_STARTED);
         filter.addAction(Intent.ACTION_DREAMING_STOPPED);
         if (Build.VERSION.SDK_INT >= 33) {
@@ -1262,6 +1270,13 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         } else {
             context.registerReceiver(dreamReceiver, filter);
         }
+    }
+
+    private boolean partyFullscreenActive() {
+        if (context == null) return false;
+        android.content.SharedPreferences presentation = context.getSharedPreferences("now_playing_presentation", Context.MODE_PRIVATE);
+        return presentation.getBoolean("party_fullscreen", false) &&
+                presentation.getLong("party_until_ms", 0) > System.currentTimeMillis();
     }
 
     private void registerActivityLifecycle() {

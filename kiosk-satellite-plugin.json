@@ -3,7 +3,7 @@
   "apiVersion": 1,
   "id": "spectrum-visualizer-overlay",
   "name": "Spectrum Visualizer Overlay",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "minAndroidSdk": 26,
   "entryClass": "me.jxl.kiosk.plugins.spectrumvisualizer.SpectrumVisualizerPlugin",
   "description": "Winamp-style spectrum overlay for Kiosk Satellite screensavers and Fotoo, with animated, microphone, and digital Sendspin modes plus Home Assistant/time visibility rules.",
