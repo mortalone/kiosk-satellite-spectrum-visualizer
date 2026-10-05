@@ -3,7 +3,7 @@
   "apiVersion": 1,
   "id": "spectrum-visualizer-overlay",
   "name": "Spectrum Visualizer Overlay",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minAndroidSdk": 26,
   "entryClass": "me.jxl.kiosk.plugins.spectrumvisualizer.SpectrumVisualizerPlugin",
   "description": "Winamp-style spectrum overlay for Kiosk Satellite screensavers and Fotoo, with animated or microphone FFT modes.",
@@ -34,10 +34,11 @@
       "default": "Animated",
       "options": [
         "Animated",
-        "Microphone"
+        "Microphone",
+        "Digital / Sendspin"
       ],
       "group": "Visualizer",
-      "description": "Animated is decorative. Microphone performs a real FFT of room audio using Kiosk Satellite's microphone permission."
+      "description": "Animated is decorative. Microphone analyzes room audio. Digital / Sendspin attaches to Kiosk Satellite's Sendspin AudioTrack and analyzes the decoded digital stream."
     },
     {
       "key": "mediaEntity",
@@ -149,6 +150,60 @@
       "step": 1,
       "group": "Spectrum",
       "description": "Visual gain applied to microphone FFT levels."
+    },
+    {
+      "key": "colorMode",
+      "type": "select",
+      "title": "Color mode",
+      "default": "Classic Winamp",
+      "options": [
+        "Classic Winamp",
+        "Level heat",
+        "Rainbow",
+        "Single color"
+      ],
+      "group": "Colors",
+      "description": "Classic Winamp colors bars by height; Level heat colors each whole bar by its current dB level."
+    },
+    {
+      "key": "singleColor",
+      "type": "string",
+      "title": "Single color",
+      "default": "#FFFFFF",
+      "group": "Colors",
+      "description": "Hex color used by Single color mode."
+    },
+    {
+      "key": "lowColor",
+      "type": "string",
+      "title": "Low level color",
+      "default": "#22C55E",
+      "group": "Colors",
+      "description": "Low-level / bottom color used by Classic Winamp and Level heat."
+    },
+    {
+      "key": "midColor",
+      "type": "string",
+      "title": "Mid level color",
+      "default": "#FACC15",
+      "group": "Colors",
+      "description": "Mid-level color used by Classic Winamp and Level heat."
+    },
+    {
+      "key": "highColor",
+      "type": "string",
+      "title": "High level color",
+      "default": "#EF4444",
+      "group": "Colors",
+      "description": "High-level / loud color used by Classic Winamp and Level heat."
+    },
+    {
+      "key": "peakColor",
+      "type": "string",
+      "title": "Peak hold color",
+      "default": "#FFFFFF",
+      "group": "Colors",
+      "description": "Color of the falling peak-hold markers."
     }
   ],
   "commands": [
@@ -174,6 +229,9 @@
     },
     {
       "title": "Spectrum"
+    },
+    {
+      "title": "Colors"
     }
   ]
 }
