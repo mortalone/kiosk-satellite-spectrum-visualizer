@@ -224,10 +224,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         showOnlyWhenPlaying =
                 values.get("showOnlyWhenPlaying") == null ||
                 Boolean.TRUE.equals(values.get("showOnlyWhenPlaying"));
-        visibilityEntity = stringSetting(values, "visibilityEntity");
-        String condition = stringSetting(values, "visibilityCondition");
-        visibilityCondition = condition.isEmpty() ? "Always" : condition;
-        visibilityValue = stringSetting(values, "visibilityValue");
+        applyVisibilityRule(stringSetting(values, "visibilityRule"));
 
         Set<String> wanted = new HashSet<>();
         if (!mediaEntity.isEmpty()) wanted.add(mediaEntity);
@@ -254,6 +251,53 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             hideVisualizer();
             updatePresentation();
         });
+    }
+
+    private void applyVisibilityRule(String raw) {
+        visibilityEntity = "";
+        visibilityCondition = "Always";
+        visibilityValue = "";
+
+        if (raw == null || raw.trim().isEmpty()) return;
+
+        String[] parts = raw.split("\\|", -1);
+        if (parts.length < 2) {
+            visibilityEntity = raw.trim();
+            visibilityCondition = "Active";
+            return;
+        }
+
+        String entity = parts[0].trim();
+        String condition = canonicalVisibilityCondition(parts[1]);
+        StringBuilder value = new StringBuilder();
+        for (int i = 2; i < parts.length; i++) {
+            if (i > 2) value.append('|');
+            value.append(parts[i]);
+        }
+
+        visibilityCondition = condition;
+        visibilityValue = value.toString().trim();
+
+        if (!"Time between".equals(condition) &&
+                !"time".equalsIgnoreCase(entity) &&
+                !"@time".equalsIgnoreCase(entity)) {
+            visibilityEntity = entity;
+        }
+    }
+
+    private static String canonicalVisibilityCondition(String raw) {
+        String value = raw == null
+                ? ""
+                : raw.trim().toLowerCase(java.util.Locale.ROOT);
+        if ("active".equals(value)) return "Active";
+        if ("inactive".equals(value)) return "Inactive";
+        if ("state equals".equals(value)) return "State equals";
+        if ("state not equals".equals(value)) return "State not equals";
+        if ("numeric above".equals(value)) return "Numeric above";
+        if ("numeric below".equals(value)) return "Numeric below";
+        if ("numeric between".equals(value)) return "Numeric between";
+        if ("time between".equals(value)) return "Time between";
+        return "Always";
     }
 
     private void pollEntity(String entity) {
