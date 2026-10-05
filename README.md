@@ -82,3 +82,14 @@ Examples:
 - `time|Time between|22:00-06:00`
 
 Leave the field empty to always allow the visualizer.
+
+
+## 0.2.5: polling Digital / Sendspin capture
+
+Digital / Sendspin no longer depends on Android delivering Visualizer callback
+events. The plugin actively polls the attached Sendspin AudioTrack using
+`Visualizer.getWaveForm()` at the configured refresh rate and performs its own
+FFT. Auto mode still falls back from the Sendspin session to Android's digital
+output mix if polling fails.
+
+This remains digital playback capture and does not use the microphone.
