@@ -39,7 +39,11 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
+import java.time.LocalTime;
+import java.time.format.DateTimeParseException;
 
 public final class SpectrumVisualizerPlugin implements KioskPlugin {
     private PluginHost host;
@@ -77,6 +81,11 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     private String mediaEntity = "";
     private boolean showOnlyWhenPlaying = true;
     private String mediaState = "";
+    private String visibilityEntity = "";
+    private String visibilityCondition = "Always";
+    private String visibilityValue = "";
+    private String visibilityState = "";
+    private final Set<String> entitySubscriptions = new HashSet<>();
 
     private SpectrumView spectrumView;
     private volatile boolean analyzerRunning;
@@ -148,24 +157,32 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             main.post(this::updatePresentation);
             return;
         }
-        if (event.startsWith("ks.ha.entity.") && !mediaEntity.isEmpty()) {
+        if (event.startsWith("ks.ha.entity.")) {
             Object id = payload.get("entityId");
             String entity = id == null
                     ? event.substring("ks.ha.entity.".length())
                     : String.valueOf(id);
-            if (mediaEntity.equals(entity)) {
-                mediaState = payload.get("state") == null
-                        ? "" : String.valueOf(payload.get("state"));
-                main.post(this::updatePresentation);
+            String state = payload.get("state") == null
+                    ? "" : String.valueOf(payload.get("state"));
+            boolean changed = false;
+            if (!mediaEntity.isEmpty() && mediaEntity.equals(entity)) {
+                mediaState = state;
+                changed = true;
             }
+            if (!visibilityEntity.isEmpty() && visibilityEntity.equals(entity)) {
+                visibilityState = state;
+                changed = true;
+            }
+            if (changed) main.post(this::updatePresentation);
         }
     }
 
     @Override
     public synchronized void stop() {
-        if (!mediaEntity.isEmpty()) {
-            try { host.unsubscribe("ha.entity." + mediaEntity); } catch (Throwable ignored) {}
+        for (String entity : new HashSet<>(entitySubscriptions)) {
+            try { host.unsubscribe("ha.entity." + entity); } catch (Throwable ignored) {}
         }
+        entitySubscriptions.clear();
         if (context != null && dreamReceiver != null) {
             try { context.unregisterReceiver(dreamReceiver); } catch (Throwable ignored) {}
         }
@@ -179,8 +196,6 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     }
 
     private void applySettings(Map<String, Object> values) {
-        String oldMedia = mediaEntity;
-
         String target = stringSetting(values, "overlayTarget");
         showOnKiosk = !"Fotoo only".equals(target);
         showOnFotoo = !"Kiosk Satellite only".equals(target);
@@ -209,16 +224,29 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         showOnlyWhenPlaying =
                 values.get("showOnlyWhenPlaying") == null ||
                 Boolean.TRUE.equals(values.get("showOnlyWhenPlaying"));
+        visibilityEntity = stringSetting(values, "visibilityEntity");
+        String condition = stringSetting(values, "visibilityCondition");
+        visibilityCondition = condition.isEmpty() ? "Always" : condition;
+        visibilityValue = stringSetting(values, "visibilityValue");
 
-        if (!oldMedia.equals(mediaEntity)) {
-            if (!oldMedia.isEmpty()) {
-                try { host.unsubscribe("ha.entity." + oldMedia); } catch (Throwable ignored) {}
+        Set<String> wanted = new HashSet<>();
+        if (!mediaEntity.isEmpty()) wanted.add(mediaEntity);
+        if (!visibilityEntity.isEmpty() &&
+                !"Always".equals(visibilityCondition) &&
+                !"Time between".equals(visibilityCondition)) {
+            wanted.add(visibilityEntity);
+        }
+        for (String old : new HashSet<>(entitySubscriptions)) {
+            if (!wanted.contains(old)) {
+                try { host.unsubscribe("ha.entity." + old); } catch (Throwable ignored) {}
+                entitySubscriptions.remove(old);
             }
-            mediaState = "";
-            if (!mediaEntity.isEmpty()) {
-                host.subscribe("ha.entity." + mediaEntity);
-                pollMedia();
-            }
+        }
+        mediaState = "";
+        visibilityState = "";
+        for (String entity : wanted) {
+            if (entitySubscriptions.add(entity)) host.subscribe("ha.entity." + entity);
+            pollEntity(entity);
         }
 
         main.post(() -> {
@@ -228,14 +256,16 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         });
     }
 
-    private void pollMedia() {
-        if (mediaEntity.isEmpty() || host == null) return;
+    private void pollEntity(String entity) {
+        if (entity == null || entity.isEmpty() || host == null) return;
         Map<String, Object> args = new HashMap<>();
-        args.put("entity_id", mediaEntity);
+        args.put("entityId", entity);
         host.executeCommand("getHaEntityState", args, (ok, data, error) -> {
             if (!ok || !(data instanceof Map)) return;
-            Object state = ((Map<?, ?>) data).get("state");
-            mediaState = state == null ? "" : String.valueOf(state);
+            Object stateValue = ((Map<?, ?>) data).get("state");
+            String state = stateValue == null ? "" : String.valueOf(stateValue);
+            if (entity.equals(mediaEntity)) mediaState = state;
+            if (entity.equals(visibilityEntity)) visibilityState = state;
             main.post(this::updatePresentation);
         });
     }
@@ -245,8 +275,80 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 !"black".equals(kioskScreensaverView) &&
                 !"blank".equals(kioskScreensaverView);
         if (!(forcePreview || kiosk || (showOnFotoo && dreaming))) return false;
+        if (!forcePreview && !visibilityAllowed()) return false;
         if (!showOnlyWhenPlaying || mediaEntity.isEmpty()) return true;
         return "playing".equalsIgnoreCase(mediaState);
+    }
+
+    private boolean visibilityAllowed() {
+        String condition = visibilityCondition == null ? "Always" : visibilityCondition;
+        if (condition.isEmpty() || "Always".equals(condition)) return true;
+        String value = visibilityValue == null ? "" : visibilityValue.trim();
+        if ("Time between".equals(condition)) return timeBetween(value);
+        if (visibilityEntity == null || visibilityEntity.isEmpty()) return true;
+
+        String state = visibilityState == null ? "" : visibilityState.trim();
+        if ("Active".equals(condition)) return activeState(state);
+        if ("Inactive".equals(condition)) return !activeState(state);
+        if ("State equals".equals(condition)) return state.equalsIgnoreCase(value);
+        if ("State not equals".equals(condition)) return !state.equalsIgnoreCase(value);
+
+        Double number = parseNumber(state);
+        if (number == null) return false;
+        if ("Numeric above".equals(condition)) {
+            Double threshold = parseNumber(value);
+            return threshold != null && number > threshold;
+        }
+        if ("Numeric below".equals(condition)) {
+            Double threshold = parseNumber(value);
+            return threshold != null && number < threshold;
+        }
+        if ("Numeric between".equals(condition)) {
+            double[] bounds = parseRange(value);
+            return bounds != null && number >= Math.min(bounds[0], bounds[1]) &&
+                    number <= Math.max(bounds[0], bounds[1]);
+        }
+        return true;
+    }
+
+    private static boolean activeState(String state) {
+        String s = state == null ? "" : state.trim().toLowerCase(java.util.Locale.ROOT);
+        return "on".equals(s) || "true".equals(s) || "home".equals(s) ||
+                "playing".equals(s) || "open".equals(s) || "detected".equals(s) ||
+                "occupied".equals(s) || "present".equals(s);
+    }
+
+    private static Double parseNumber(String value) {
+        try {
+            return Double.parseDouble(value.trim().replace(',', '.'));
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static double[] parseRange(String value) {
+        if (value == null) return null;
+        String[] parts = value.trim().split("\\.\\.");
+        if (parts.length != 2) return null;
+        Double a = parseNumber(parts[0]);
+        Double b = parseNumber(parts[1]);
+        return a == null || b == null ? null : new double[] {a, b};
+    }
+
+    private static boolean timeBetween(String value) {
+        if (value == null) return true;
+        String[] parts = value.trim().split("\\s*-\\s*");
+        if (parts.length != 2) return true;
+        try {
+            LocalTime from = LocalTime.parse(parts[0].trim());
+            LocalTime until = LocalTime.parse(parts[1].trim());
+            LocalTime now = LocalTime.now();
+            if (from.equals(until)) return true;
+            if (from.isBefore(until)) return !now.isBefore(from) && now.isBefore(until);
+            return !now.isBefore(from) || now.isBefore(until);
+        } catch (DateTimeParseException ignored) {
+            return true;
+        }
     }
 
     private void updatePresentation() {
@@ -541,12 +643,23 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                         android.os.SystemClock.elapsedRealtime() -
                                 digitalLastFrameAtMs);
         if (host != null) {
-            host.status(
+            String status =
                     "Digital status: " + trackInfo +
                     "; attachedSession=" + digitalAudioSessionId +
                     "; systemMix=" + digitalUsingSystemMix +
-                    "; lastFrameAgeMs=" + age,
-                    false);
+                    "; lastFrameAgeMs=" + age;
+            host.status(status, false);
+            // Keep the result visible in Remote Admin Overview as well as on
+            // the plugin settings page so the diagnostic button has an
+            // obvious destination when invoked remotely.
+            host.publishStatusTile(
+                    "digital-source",
+                    "Spectrum digital source",
+                    track == null || age < 0 ? "warn" : "on",
+                    status);
+            try {
+                host.showWindow("Spectrum digital source", status, "");
+            } catch (Throwable ignored) {}
         }
     }
 
