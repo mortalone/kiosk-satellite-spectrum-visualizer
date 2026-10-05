@@ -3,7 +3,7 @@
   "apiVersion": 1,
   "id": "spectrum-visualizer-overlay",
   "name": "Spectrum Visualizer Overlay",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "minAndroidSdk": 26,
   "entryClass": "me.jxl.kiosk.plugins.spectrumvisualizer.SpectrumVisualizerPlugin",
   "description": "Winamp-style spectrum overlay for Kiosk Satellite screensavers and Fotoo, with animated or microphone FFT modes.",
@@ -39,6 +39,19 @@
       ],
       "group": "Visualizer",
       "description": "Animated is decorative. Microphone analyzes room audio. Digital / Sendspin attaches to Kiosk Satellite's Sendspin AudioTrack and analyzes the decoded digital stream."
+    },
+    {
+      "key": "digitalCapture",
+      "type": "select",
+      "title": "Digital capture method",
+      "default": "Auto",
+      "options": [
+        "Auto",
+        "Sendspin session",
+        "Device playback"
+      ],
+      "group": "Visualizer",
+      "description": "Auto uses the Sendspin audio session first and can fall back to device playback capture. Microphone input is not used."
     },
     {
       "key": "mediaEntity",
@@ -218,6 +231,10 @@
     {
       "id": "hide",
       "title": "Hide visualizer"
+    },
+    {
+      "id": "digitalStatus",
+      "title": "Report digital source status"
     }
   ],
   "groups": [
