@@ -100,6 +100,9 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     private volatile int digitalSamplingRateMilliHz = 0;
     private byte[] digitalWaveform = new byte[0];
     private String digitalCapture = "Auto";
+    private volatile AudioTrack discoveredTrack;
+    private volatile long lastDiscoveryAtMs;
+    private volatile String discoveryStatus = "not scanned";
     private volatile String digitalLastError = "";
     private volatile int digitalWaveformPeak = 0;
     private volatile double digitalWaveformRms = 0;
@@ -737,13 +740,14 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                         0L,
                         android.os.SystemClock.elapsedRealtime() -
                                 digitalLastFrameAtMs);
-        return "Spectrum 0.2.6 | " + source + " | " + digitalCapture +
+        return "Spectrum 0.2.7 | " + source + " | " + digitalCapture +
                     "\n" + trackInfo +
                     "; attachedSession=" + digitalAudioSessionId +
                     "; systemMix=" + digitalUsingSystemMix +
                     "; pollResult=" + digitalLastPollResult +
                     "; sampleRateMilliHz=" + digitalSamplingRateMilliHz +
                     "; lastFrameAgeMs=" + age +
+                    "\n" + discoveryStatus +
                     "\npeak=" + digitalWaveformPeak + "; rms=" +
                     String.format(java.util.Locale.ROOT, "%.1f", digitalWaveformRms) +
                     "; analyzer=" + analyzerRunning + "; barsView=" + (spectrumView != null) +
@@ -840,9 +844,18 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         return spectrumBars(real, imag, (int) Math.round(sampleRate), bars, gain);
     }
 
-    private AudioTrack resolveSendspinAudioTrack() {
+    private synchronized AudioTrack resolveSendspinAudioTrack() {
+        try {
+            if (discoveredTrack != null &&
+                    discoveredTrack.getState() == AudioTrack.STATE_INITIALIZED) return discoveredTrack;
+        } catch (Throwable ignored) {}
+        discoveredTrack = null;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (lastDiscoveryAtMs != 0 && now - lastDiscoveryAtMs < 1000L) return null;
+        lastDiscoveryAtMs = now;
         Object app = context == null ? null : context.getApplicationContext();
         if (app == null) return null;
+        String appPath = "app=" + app.getClass().getName();
 
         // Fast path for non-obfuscated/current Kiosk Satellite builds.
         try {
@@ -853,24 +866,62 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             if (track instanceof AudioTrack) {
                 AudioTrack audioTrack = (AudioTrack) track;
                 if (audioTrack.getState() == AudioTrack.STATE_INITIALIZED) {
+                    discoveredTrack = audioTrack;
+                    discoveryStatus = appPath + "; foundAt=app.sendspin.session.output.track";
                     return audioTrack;
                 }
             }
-        } catch (Throwable ignored) {}
+            appPath += "; appTrack=empty";
+        } catch (Throwable error) {
+            appPath += "; appPath=" + safeMessage(error);
+        }
+
+        // Release shrinking may remove the app's unused bridge-holder field.
+        // EchoReference retains each live TrackTap independently. Read this
+        // registry only: never call Source.take(), which consumes echo samples.
+        try {
+            Class<?> registry = Class.forName("me.jxl.kiosk_satellite.EchoReference",
+                    false, context.getClassLoader());
+            Object sources = AudioRegistrySnapshot.readSources(registry);
+            int count = sources instanceof java.util.Collection
+                    ? ((java.util.Collection<?>) sources).size() : -1;
+            appPath += "; echoSources=" + count;
+            if (sources instanceof Iterable) {
+                for (Object source : (Iterable<?>) sources) {
+                    AudioTrack hit = findLiveAudioTrack(source, 0, new java.util.IdentityHashMap<>());
+                    if (hit != null) {
+                        discoveredTrack = hit;
+                        discoveryStatus = appPath + "; foundAt=echo.trackRegistry";
+                        return hit;
+                    }
+                }
+            }
+        } catch (Throwable error) {
+            appPath += "; echo=" + safeMessage(error);
+        }
 
         // Compatibility path: walk only Kiosk Satellite objects and find a
         // live AudioTrack. This survives Kotlin/R8 private-field renaming and
         // small internal class changes.
         java.util.IdentityHashMap<Object, Boolean> seen =
                 new java.util.IdentityHashMap<>();
-        return findLiveAudioTrack(app, 0, seen);
+        AudioTrack hit = findLiveAudioTrack(app, 0, seen);
+        String location = "application graph";
+        if (hit == null) {
+            hit = findLiveAudioTrack(activeKioskActivity(), 0, new java.util.IdentityHashMap<>());
+            location = "activity graph";
+        }
+        discoveredTrack = hit;
+        discoveryStatus = appPath + "; foundAt=" + (hit == null ? "none" : location);
+        return hit;
     }
 
     private static AudioTrack findLiveAudioTrack(
             Object value,
             int depth,
             java.util.IdentityHashMap<Object, Boolean> seen) {
-        if (value == null || depth > 6 || seen.put(value, Boolean.TRUE) != null) {
+        if (value == null || depth > 8 || seen.size() >= 256 ||
+                seen.put(value, Boolean.TRUE) != null) {
             return null;
         }
         if (value instanceof AudioTrack) {

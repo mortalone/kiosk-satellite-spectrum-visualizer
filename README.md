@@ -118,3 +118,15 @@ Fixes the invalid `digital-source` status-tile key and oversized tile text
 that caused the diagnostic command to fail and Kiosk Satellite to disable
 the plugin. Each diagnostic output is isolated so a host output failure
 cannot prevent the on-screen panel.
+
+## 0.2.7: release-build AudioTrack discovery
+
+The plugin additionally searches the host's live EchoReference track registry
+and the active activity. It reads registry references only: it never calls
+`Source.take()`, changes gains, or consumes the echo canceller's audio.
+This avoids depending only on private application bridge-holder fields that
+release shrinking may remove. Discovery is cached and bounded.
+
+Debug now includes `app`, an application-path error if present, `echoSources`
+and `foundAt`, so an unavailable track can be distinguished from an empty
+registry. Hardware verification is still needed for the affected kiosk.

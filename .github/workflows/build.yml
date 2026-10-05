@@ -26,6 +26,11 @@ jobs:
           yes | "$SDKMANAGER" "platforms;android-35" >/dev/null
       - name: Build plugin
         run: python3 tools/build.py --android-platform 35
+      - name: Verify read-only audio registry discovery
+        run: |
+          mkdir -p /tmp/registry-test
+          javac --release 8 -d /tmp/registry-test src/me/jxl/kiosk/plugins/spectrumvisualizer/AudioRegistrySnapshot.java tests/AudioRegistrySnapshotTest.java
+          java -cp /tmp/registry-test me.jxl.kiosk.plugins.spectrumvisualizer.AudioRegistrySnapshotTest
       - uses: actions/upload-artifact@v4
         with:
           name: spectrum-visualizer-overlay
