@@ -3,7 +3,7 @@
   "apiVersion": 1,
   "id": "spectrum-visualizer-overlay",
   "name": "Spectrum Visualizer Overlay",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "minAndroidSdk": 26,
   "entryClass": "me.jxl.kiosk.plugins.spectrumvisualizer.SpectrumVisualizerPlugin",
   "description": "Winamp-style spectrum overlay for Kiosk Satellite screensavers and Fotoo, with animated, microphone, and digital Sendspin modes plus Home Assistant/time visibility rules.",
@@ -59,7 +59,7 @@
       "title": "Media player (optional)",
       "default": "",
       "group": "Visualizer",
-      "description": "Optional media_player used to show the visualizer only while music is playing."
+      "description": "Visibility only: this entity must be playing when Only while playing is enabled. It does not select the Sendspin audio source."
     },
     {
       "key": "showOnlyWhenPlaying",
@@ -243,6 +243,14 @@
     {
       "id": "digitalStatus",
       "title": "Report digital source status"
+    },
+    {
+      "id": "showDebug",
+      "title": "Show persistent debug overlay"
+    },
+    {
+      "id": "hideDebug",
+      "title": "Hide debug overlay"
     }
   ],
   "groups": [

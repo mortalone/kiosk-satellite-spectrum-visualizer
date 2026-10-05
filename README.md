@@ -93,3 +93,28 @@ FFT. Auto mode still falls back from the Sendspin session to Android's digital
 output mix if polling fails.
 
 This remains digital playback capture and does not use the microphone.
+
+
+## 0.2.6: persistent digital diagnostics
+
+Digital / Sendspin automatically shows a persistent, once-per-second debug
+panel at the top of the device screen. It stays visible even when media-player
+or visibility rules hide the spectrum. It reports the media-player state,
+screensaver state, visibility decision, AudioTrack/session, poll result, frame
+age, waveform peak/RMS and the latest attach/poll error. A successful poll with
+peak=0 and rms=0 means Android returned silence.
+
+**Media player (optional)** is only a visibility gate; it never chooses the
+audio source. With **Only while playing** enabled, its HA state must be
+`playing`. Leave it empty to remove that gate.
+
+**Report digital source status** now enables the persistent panel and reports
+to plugin status and the Remote Admin Overview tile. **Show persistent debug
+overlay** and **Hide debug overlay** control the panel independently of the
+spectrum. Hide lasts until plugin restart; digital mode shows diagnostics
+again on restart. No new settings were added (20 settings, 6 commands).
+
+Fixes the invalid `digital-source` status-tile key and oversized tile text
+that caused the diagnostic command to fail and Kiosk Satellite to disable
+the plugin. Each diagnostic output is isolated so a host output failure
+cannot prevent the on-screen panel.

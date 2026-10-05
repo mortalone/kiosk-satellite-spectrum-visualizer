@@ -32,6 +32,8 @@ if not source_root.is_dir():
 
 manifest_bytes = manifest_path.read_bytes()
 manifest = json.loads(manifest_bytes)
+if len(manifest.get("settings", [])) > 20 or len(manifest.get("commands", [])) > 20:
+    raise SystemExit("Kiosk Satellite allows at most 20 settings and 20 commands.")
 sdk_root = Path(os.environ.get("ANDROID_HOME", os.environ.get("ANDROID_SDK_ROOT", str(Path.home() / "android-sdk"))))
 platform = android_platform(sdk_root, args.android_platform)
 

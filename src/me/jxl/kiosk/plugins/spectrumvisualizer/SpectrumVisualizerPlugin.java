@@ -31,6 +31,7 @@ import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
+import android.widget.TextView;
 
 import me.jxl.kiosk.plugins.KioskPlugin;
 import me.jxl.kiosk.plugins.PluginHost;
@@ -99,6 +100,22 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     private volatile int digitalSamplingRateMilliHz = 0;
     private byte[] digitalWaveform = new byte[0];
     private String digitalCapture = "Auto";
+    private volatile String digitalLastError = "";
+    private volatile int digitalWaveformPeak = 0;
+    private volatile double digitalWaveformRms = 0;
+    // Enabled on startup for digital mode while diagnosing device capture.
+    // Commands toggle it without consuming another manifest setting.
+    private boolean debugEnabled = true;
+    private boolean debugRequested;
+    private TextView debugView;
+    private final Runnable debugTick = new Runnable() {
+        @Override public void run() {
+            if (host == null || !debugEnabled) return;
+            refreshDebugOverlay();
+            updatePresentation();
+            main.postDelayed(this, 1000L);
+        }
+    };
 
     @Override
     public synchronized void start(PluginHost host, Map<String, Object> settings) {
@@ -137,6 +154,17 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             main.post(this::updatePresentation);
         } else if ("digitalStatus".equals(command)) {
             reportDigitalStatus();
+        } else if ("showDebug".equals(command)) {
+            debugEnabled = true;
+            debugRequested = true;
+            main.post(this::restartDebugOverlay);
+        } else if ("hideDebug".equals(command)) {
+            debugEnabled = false;
+            main.post(() -> {
+                main.removeCallbacks(debugTick);
+                removeOverlayView(debugView);
+                debugView = null;
+            });
         } else if ("hide".equals(command)) {
             forcePreview = false;
             main.post(this::hideVisualizer);
@@ -193,7 +221,12 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             try { application.unregisterActivityLifecycleCallbacks(lifecycleCallbacks); } catch (Throwable ignored) {}
         }
         stopAnalyzer();
-        main.post(this::hideVisualizer);
+        main.removeCallbacks(debugTick);
+        main.post(() -> {
+            hideVisualizer();
+            removeOverlayView(debugView);
+            debugView = null;
+        });
         currentActivity = null;
         host = null;
     }
@@ -253,6 +286,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             stopAnalyzer();
             hideVisualizer();
             updatePresentation();
+            restartDebugOverlay();
         });
     }
 
@@ -619,6 +653,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             return true;
         } catch (Throwable error) {
             releaseDigitalVisualizer();
+            digitalLastError = "attach session " + sessionId + ": " + safeMessage(error);
             if (host != null) {
                 host.status(
                         "Digital spectrum attach failed for session " +
@@ -646,6 +681,16 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             int samplingRate = vis.getSamplingRate();
             digitalSamplingRateMilliHz = samplingRate;
             digitalLastFrameAtMs = android.os.SystemClock.elapsedRealtime();
+            int peak = 0;
+            double sumSquares = 0;
+            for (byte value : digitalWaveform) {
+                int sample = (value & 0xff) - 128;
+                peak = Math.max(peak, Math.abs(sample));
+                sumSquares += sample * sample;
+            }
+            digitalWaveformPeak = peak;
+            digitalWaveformRms = Math.sqrt(sumSquares / digitalWaveform.length);
+            digitalLastError = "";
 
             float[] bars = waveformSpectrumBars(
                     digitalWaveform, samplingRate, barCount, gain);
@@ -657,6 +702,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             return true;
         } catch (Throwable error) {
             digitalLastPollResult = Integer.MIN_VALUE + 1;
+            digitalLastError = "poll: " + safeMessage(error);
             return false;
         }
     }
@@ -669,9 +715,10 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         }
     }
 
-    private void reportDigitalStatus() {
+    private String digitalStatusText() {
         AudioTrack track = resolveSendspinAudioTrack();
         String trackInfo;
+        try {
         if (track == null) {
             trackInfo = "no Sendspin AudioTrack found";
         } else {
@@ -681,32 +728,86 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                     ", session=" + track.getAudioSessionId() +
                     ", rate=" + track.getSampleRate();
         }
+        } catch (Throwable error) {
+            trackInfo = "track unavailable: " + safeMessage(error);
+        }
         long age = digitalLastFrameAtMs <= 0
                 ? -1
                 : Math.max(
                         0L,
                         android.os.SystemClock.elapsedRealtime() -
                                 digitalLastFrameAtMs);
-        if (host != null) {
-            String status =
-                    "Digital status: " + trackInfo +
+        return "Spectrum 0.2.6 | " + source + " | " + digitalCapture +
+                    "\n" + trackInfo +
                     "; attachedSession=" + digitalAudioSessionId +
                     "; systemMix=" + digitalUsingSystemMix +
                     "; pollResult=" + digitalLastPollResult +
                     "; sampleRateMilliHz=" + digitalSamplingRateMilliHz +
-                    "; lastFrameAgeMs=" + age;
-            host.status(status, false);
-            // Keep the result visible in Remote Admin Overview as well as on
-            // the plugin settings page so the diagnostic button has an
-            // obvious destination when invoked remotely.
-            host.publishStatusTile(
-                    "digital-source",
-                    "Spectrum digital source",
-                    track == null || age < 0 ? "warn" : "on",
-                    status);
-            try {
-                host.showWindow("Spectrum digital source", status, "");
-            } catch (Throwable ignored) {}
+                    "; lastFrameAgeMs=" + age +
+                    "\npeak=" + digitalWaveformPeak + "; rms=" +
+                    String.format(java.util.Locale.ROOT, "%.1f", digitalWaveformRms) +
+                    "; analyzer=" + analyzerRunning + "; barsView=" + (spectrumView != null) +
+                    "\nmedia=" + mediaEntity + "; state=" + mediaState +
+                    "; onlyPlaying=" + showOnlyWhenPlaying +
+                    "\nscreensaver=" + kioskScreensaverActive + "/" + kioskScreensaverView +
+                    "; dreaming=" + dreaming + "; visibility=" + visibilityAllowed() +
+                    "; overlay=" + overlayActive() +
+                    (digitalLastError.isEmpty() ? "" : "\nerror=" + digitalLastError);
+    }
+
+    private void reportDigitalStatus() {
+        if (host == null) return;
+        String status = digitalStatusText();
+        // Diagnostic failures must never escape execute() and disable the plugin.
+        try { host.status(status.substring(0, Math.min(1000, status.length())), false); }
+        catch (Throwable error) { logDiagnosticFailure(error); }
+        try {
+            host.publishStatusTile("digital_source", "Spectrum digital source",
+                    digitalLastFrameAtMs <= 0 ? "warn" : "on",
+                    "session=" + digitalAudioSessionId + "; poll=" + digitalLastPollResult +
+                    "; peak=" + digitalWaveformPeak + "; overlay=" + overlayActive());
+        } catch (Throwable error) { logDiagnosticFailure(error); }
+        debugEnabled = true;
+        debugRequested = true;
+        main.post(this::restartDebugOverlay);
+    }
+
+    private void logDiagnosticFailure(Throwable error) {
+        try { if (host != null) host.log("Debug output: " + safeMessage(error)); }
+        catch (Throwable ignored) {}
+    }
+
+    private void restartDebugOverlay() {
+        main.removeCallbacks(debugTick);
+        removeOverlayView(debugView);
+        debugView = null;
+        if (host != null && debugEnabled &&
+                (debugRequested || "Digital / Sendspin".equals(source))) {
+            debugTick.run();
+        }
+    }
+
+    private void refreshDebugOverlay() {
+        if (context == null || host == null) return;
+        try {
+            if (debugView == null) {
+                TextView view = new TextView(context);
+                view.setTextColor(Color.WHITE);
+                view.setTextSize(12);
+                view.setBackgroundColor(Color.argb(225, 0, 0, 0));
+                view.setPadding(dp(10), dp(8), dp(10), dp(8));
+                view.setText(digitalStatusText());
+                int width = context.getResources().getDisplayMetrics().widthPixels * 95 / 100;
+                if (!addOverlayView(view, width, ViewGroup.LayoutParams.WRAP_CONTENT,
+                        Gravity.TOP | Gravity.CENTER_HORIZONTAL, dp(12))) return;
+                debugView = view;
+            }
+            debugView.setText(digitalStatusText());
+            debugView.bringToFront();
+        } catch (Throwable error) {
+            removeOverlayView(debugView);
+            debugView = null;
+            logDiagnosticFailure(error);
         }
     }
 

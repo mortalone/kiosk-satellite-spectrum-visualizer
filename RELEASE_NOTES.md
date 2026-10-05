@@ -1,9 +1,10 @@
-## Spectrum Visualizer Overlay 0.2.5
+# Spectrum Visualizer Overlay 0.2.6
 
-- Fixes Digital / Sendspin showing no spectrum while Animated mode works.
-- Replaces callback-only Android Visualizer capture with active `getWaveForm()` polling.
-- Polls the live Sendspin AudioTrack at the configured refresh rate and performs the FFT in the plugin.
-- Auto still falls back to the Android output mix if the Sendspin session cannot be polled.
-- Adds poll result and sampling rate to **Report digital source status**.
-- Uses normalized Visualizer scaling, suitable for music visualization.
-- Keeps the manifest at the 20-setting Kiosk Satellite limit.
+- Fix Report digital source status disabling the plugin: valid status tile key and short summary.
+- Add a persistent, once-per-second on-screen debug panel, shown automatically for Digital / Sendspin.
+- Show player/visibility gates, screensaver state, track/session, polling, frame age, waveform peak/RMS and capture errors.
+- Add Show persistent debug overlay and Hide debug overlay commands; Report digital source status also shows the panel.
+- Explain that Media player only controls visibility, not the digital audio source.
+- Keep 20 settings; add a build-time check for Kiosk Satellite's settings/commands limits.
+
+Digital capture still uses Android playback data and no microphone. Device verification is required to diagnose the missing spectrum.
