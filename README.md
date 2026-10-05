@@ -43,3 +43,21 @@ plugin only needs Kiosk Satellite to have the active Sendspin AudioTrack.
 
 Low, mid, high, single and peak-hold colors are independently configurable with
 hex values such as `#22C55E`, `#FACC15` and `#EF4444`.
+
+
+## 0.2.2: improved Digital / Sendspin capture
+
+Digital / Sendspin now uses Android waveform capture from the active playback
+session and performs the FFT inside the plugin. This is more compatible than
+depending on Android's own FFT callback.
+
+Digital capture method:
+- **Auto** — prefer the Sendspin session; if no frames arrive, retry against
+  device playback.
+- **Sendspin session** — only the Sendspin playback session.
+- **Device playback** — capture the device's digital playback path.
+
+None of these digital modes uses microphone input.
+
+The plugin also includes **Report digital source status**, which reports the
+discovered AudioTrack, session id and whether capture frames are arriving.
