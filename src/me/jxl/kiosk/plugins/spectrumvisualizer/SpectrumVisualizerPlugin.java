@@ -84,6 +84,9 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     private AudioRecord audioRecord;
     private volatile Visualizer digitalVisualizer;
     private volatile int digitalAudioSessionId = -1;
+    private volatile long digitalLastFrameAtMs = 0L;
+    private volatile boolean digitalUsingSystemMix = false;
+    private String digitalCapture = "Auto";
 
     @Override
     public synchronized void start(PluginHost host, Map<String, Object> settings) {
@@ -120,6 +123,8 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         if ("show".equals(command) || "test".equals(command)) {
             forcePreview = true;
             main.post(this::updatePresentation);
+        } else if ("digitalStatus".equals(command)) {
+            reportDigitalStatus();
         } else if ("hide".equals(command)) {
             forcePreview = false;
             main.post(this::hideVisualizer);
@@ -193,6 +198,8 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         gain = intSetting(values, "gain", 3, 1, 10);
         String nextColorMode = stringSetting(values, "colorMode");
         colorMode = nextColorMode.isEmpty() ? "Classic Winamp" : nextColorMode;
+        String nextDigitalCapture = stringSetting(values, "digitalCapture");
+        digitalCapture = nextDigitalCapture.isEmpty() ? "Auto" : nextDigitalCapture;
         singleColor = colorSetting(values, "singleColor", Color.WHITE);
         lowColor = colorSetting(values, "lowColor", Color.rgb(34, 197, 94));
         midColor = colorSetting(values, "midColor", Color.rgb(250, 204, 21));
@@ -355,7 +362,9 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
      * AudioTrack reflectively and attaches only to its audioSessionId.
      */
     private void runDigitalAnalyzer() {
-        int lastWaitingReport = 0;
+        long noFramesSince = android.os.SystemClock.elapsedRealtime();
+        int lastReportedSession = Integer.MIN_VALUE;
+
         while (analyzerRunning && spectrumView != null) {
             AudioTrack track = resolveSendspinAudioTrack();
             int sessionId = -1;
@@ -363,104 +372,282 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 sessionId = track.getAudioSessionId();
             }
 
-            if (sessionId <= 0) {
+            boolean forceMix = "System output mix".equals(digitalCapture);
+            boolean forceSession = "Sendspin session".equals(digitalCapture);
+            int wantedSession = forceMix ? 0 : sessionId;
+
+            if (wantedSession <= 0 && !forceMix) {
                 releaseDigitalVisualizer();
-                SpectrumView view = spectrumView;
-                if (view != null) {
-                    view.setLevels(new float[barCount]);
-                    view.postInvalidate();
-                }
-                if (lastWaitingReport == 0 && host != null) {
+                zeroDigitalBars();
+                if (host != null && lastReportedSession != -1) {
                     host.status(
-                            "Digital visualizer is waiting for Kiosk Satellite Sendspin audio.",
+                            "Digital visualizer: waiting for an active Sendspin AudioTrack.",
                             false);
-                    lastWaitingReport = 1;
+                    lastReportedSession = -1;
                 }
-                sleep(500);
+                sleep(350);
                 continue;
             }
 
-            if (digitalVisualizer == null || digitalAudioSessionId != sessionId) {
-                releaseDigitalVisualizer();
-                try {
-                    final Visualizer vis = new Visualizer(sessionId);
-                    int[] range = Visualizer.getCaptureSizeRange();
-                    int capture = range != null && range.length >= 2
-                            ? range[1] : 1024;
-                    vis.setCaptureSize(capture);
-                    int rate = Math.min(
-                            Visualizer.getMaxCaptureRate(),
-                            Math.max(5000, fps * 1000));
-                    vis.setDataCaptureListener(
-                            new Visualizer.OnDataCaptureListener() {
-                                @Override
-                                public void onWaveFormDataCapture(
-                                        Visualizer visualizer,
-                                        byte[] waveform,
-                                        int samplingRate) {}
-
-                                @Override
-                                public void onFftDataCapture(
-                                        Visualizer visualizer,
-                                        byte[] fft,
-                                        int samplingRate) {
-                                    if (!analyzerRunning ||
-                                            digitalVisualizer != visualizer ||
-                                            fft == null) return;
-                                    float[] bars = visualizerFftBars(
-                                            fft, samplingRate, barCount, gain);
-                                    SpectrumView view = spectrumView;
-                                    if (view != null) {
-                                        view.setLevels(bars);
-                                        view.postInvalidate();
-                                    }
-                                }
-                            },
-                            rate,
-                            false,
-                            true);
-                    vis.setEnabled(true);
-                    digitalVisualizer = vis;
-                    digitalAudioSessionId = sessionId;
-                    lastWaitingReport = 0;
-                    if (host != null) {
-                        host.status(
-                                "Digital spectrum attached to Sendspin audio session " +
-                                        sessionId + ".",
-                                false);
+            if (digitalVisualizer == null || digitalAudioSessionId != wantedSession) {
+                if (!attachDigitalVisualizer(wantedSession, wantedSession == 0)) {
+                    if (!forceSession && wantedSession != 0) {
+                        // Some Android builds expose capture only on output-mix session 0.
+                        // This remains digital device output, never microphone input.
+                        if (!attachDigitalVisualizer(0, true)) {
+                            zeroDigitalBars();
+                            sleep(750);
+                            continue;
+                        }
+                    } else {
+                        zeroDigitalBars();
+                        sleep(750);
+                        continue;
                     }
-                } catch (Throwable error) {
-                    releaseDigitalVisualizer();
-                    if (host != null) {
-                        host.status(
-                                "Digital Sendspin spectrum unavailable: " +
-                                        safeMessage(error),
-                                true);
-                    }
-                    sleep(1000);
-                    continue;
                 }
+                noFramesSince = android.os.SystemClock.elapsedRealtime();
+                lastReportedSession = digitalAudioSessionId;
             }
 
-            // NativeAudioOutput may replace its AudioTrack between streams.
-            // Re-resolve periodically and rebuild Visualizer if the session id
-            // changes.
-            sleep(400);
+            long now = android.os.SystemClock.elapsedRealtime();
+            long last = digitalLastFrameAtMs;
+            if (last == 0L || now - last > 2200L) {
+                // The effect attached successfully but this OEM may not deliver
+                // per-session capture callbacks. Auto mode retries once against
+                // the digital output mix, which is how Android's own visualizers
+                // commonly work on these builds.
+                if ("Auto".equals(digitalCapture) &&
+                        digitalAudioSessionId != 0 &&
+                        now - noFramesSince > 2200L) {
+                    releaseDigitalVisualizer();
+                    if (!attachDigitalVisualizer(0, true)) {
+                        zeroDigitalBars();
+                    }
+                    noFramesSince = now;
+                }
+            } else {
+                noFramesSince = now;
+            }
+
+            sleep(300);
         }
         releaseDigitalVisualizer();
     }
 
-    private AudioTrack resolveSendspinAudioTrack() {
+    private boolean attachDigitalVisualizer(int sessionId, boolean systemMix) {
+        releaseDigitalVisualizer();
         try {
-            Object app = context == null ? null : context.getApplicationContext();
+            final Visualizer vis = new Visualizer(sessionId);
+            int[] range = Visualizer.getCaptureSizeRange();
+            int capture = 1024;
+            if (range != null && range.length >= 2) {
+                capture = Math.max(range[0], Math.min(range[1], 1024));
+            }
+            vis.setCaptureSize(capture);
+            int rate = Math.min(
+                    Visualizer.getMaxCaptureRate(),
+                    Math.max(5000, fps * 1000));
+
+            digitalLastFrameAtMs = 0L;
+            vis.setDataCaptureListener(
+                    new Visualizer.OnDataCaptureListener() {
+                        @Override
+                        public void onWaveFormDataCapture(
+                                Visualizer visualizer,
+                                byte[] waveform,
+                                int samplingRate) {
+                            if (!analyzerRunning ||
+                                    digitalVisualizer != visualizer ||
+                                    waveform == null ||
+                                    waveform.length < 16) return;
+                            digitalLastFrameAtMs =
+                                    android.os.SystemClock.elapsedRealtime();
+                            float[] bars = waveformSpectrumBars(
+                                    waveform, samplingRate, barCount, gain);
+                            SpectrumView view = spectrumView;
+                            if (view != null) {
+                                view.setLevels(bars);
+                                view.postInvalidate();
+                            }
+                        }
+
+                        @Override
+                        public void onFftDataCapture(
+                                Visualizer visualizer,
+                                byte[] fft,
+                                int samplingRate) {
+                            // Waveform capture is deliberately used instead of
+                            // Android's FFT callback. Several Android/Lineage
+                            // audio HALs expose session waveform data but never
+                            // deliver FFT callbacks. We run the FFT ourselves.
+                        }
+                    },
+                    rate,
+                    true,
+                    false);
+            vis.setEnabled(true);
+
+            digitalVisualizer = vis;
+            digitalAudioSessionId = sessionId;
+            digitalUsingSystemMix = systemMix;
+
+            if (host != null) {
+                host.status(
+                        systemMix
+                                ? "Digital spectrum attached to Android output mix."
+                                : "Digital spectrum attached to Sendspin audio session " +
+                                    sessionId + ".",
+                        false);
+            }
+            return true;
+        } catch (Throwable error) {
+            releaseDigitalVisualizer();
+            if (host != null) {
+                host.status(
+                        "Digital spectrum attach failed for session " +
+                                sessionId + ": " + safeMessage(error),
+                        true);
+            }
+            return false;
+        }
+    }
+
+    private void zeroDigitalBars() {
+        SpectrumView view = spectrumView;
+        if (view != null) {
+            view.setLevels(new float[barCount]);
+            view.postInvalidate();
+        }
+    }
+
+    private void reportDigitalStatus() {
+        AudioTrack track = resolveSendspinAudioTrack();
+        String trackInfo;
+        if (track == null) {
+            trackInfo = "no Sendspin AudioTrack found";
+        } else {
+            trackInfo =
+                    "trackState=" + track.getState() +
+                    ", playState=" + track.getPlayState() +
+                    ", session=" + track.getAudioSessionId() +
+                    ", rate=" + track.getSampleRate();
+        }
+        long age = digitalLastFrameAtMs <= 0
+                ? -1
+                : Math.max(
+                        0L,
+                        android.os.SystemClock.elapsedRealtime() -
+                                digitalLastFrameAtMs);
+        if (host != null) {
+            host.status(
+                    "Digital status: " + trackInfo +
+                    "; attachedSession=" + digitalAudioSessionId +
+                    "; systemMix=" + digitalUsingSystemMix +
+                    "; lastFrameAgeMs=" + age,
+                    false);
+        }
+    }
+
+    private static float[] waveformSpectrumBars(
+            byte[] waveform,
+            int samplingRateMilliHz,
+            int bars,
+            int gain) {
+        int sourceN = waveform.length;
+        int n = 1;
+        while ((n << 1) <= sourceN && (n << 1) <= 2048) n <<= 1;
+        if (n < 64) return new float[bars];
+
+        double sampleRate = samplingRateMilliHz > 100000
+                ? samplingRateMilliHz / 1000.0
+                : samplingRateMilliHz;
+        if (sampleRate <= 0) sampleRate = 48000.0;
+
+        double[] real = new double[n];
+        double[] imag = new double[n];
+        for (int i = 0; i < n; i++) {
+            // Android Visualizer waveform is unsigned PCM8 centered at 128.
+            double sample = ((waveform[i] & 0xFF) - 128) / 128.0;
+            double window =
+                    0.5 - 0.5 * Math.cos(2.0 * Math.PI * i / (n - 1));
+            real[i] = sample * window;
+            imag[i] = 0.0;
+        }
+        fft(real, imag);
+        return spectrumBars(real, imag, (int) Math.round(sampleRate), bars, gain);
+    }
+
+    private AudioTrack resolveSendspinAudioTrack() {
+        Object app = context == null ? null : context.getApplicationContext();
+        if (app == null) return null;
+
+        // Fast path for non-obfuscated/current Kiosk Satellite builds.
+        try {
             Object bridge = fieldValue(app, "sendspin");
             Object session = fieldValue(bridge, "session");
             Object output = fieldValue(session, "output");
             Object track = fieldValue(output, "track");
-            return track instanceof AudioTrack ? (AudioTrack) track : null;
-        } catch (Throwable ignored) {
+            if (track instanceof AudioTrack) {
+                AudioTrack audioTrack = (AudioTrack) track;
+                if (audioTrack.getState() == AudioTrack.STATE_INITIALIZED) {
+                    return audioTrack;
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        // Compatibility path: walk only Kiosk Satellite objects and find a
+        // live AudioTrack. This survives Kotlin/R8 private-field renaming and
+        // small internal class changes.
+        java.util.IdentityHashMap<Object, Boolean> seen =
+                new java.util.IdentityHashMap<>();
+        return findLiveAudioTrack(app, 0, seen);
+    }
+
+    private static AudioTrack findLiveAudioTrack(
+            Object value,
+            int depth,
+            java.util.IdentityHashMap<Object, Boolean> seen) {
+        if (value == null || depth > 6 || seen.put(value, Boolean.TRUE) != null) {
             return null;
         }
+        if (value instanceof AudioTrack) {
+            AudioTrack track = (AudioTrack) value;
+            try {
+                if (track.getState() == AudioTrack.STATE_INITIALIZED &&
+                        track.getPlayState() == AudioTrack.PLAYSTATE_PLAYING) {
+                    return track;
+                }
+            } catch (Throwable ignored) {}
+            return null;
+        }
+
+        Class<?> type = value.getClass();
+        String name = type.getName();
+        if (!(name.startsWith("me.jxl.kiosk_satellite") ||
+                name.startsWith("me.jxl.kiosk."))) {
+            return null;
+        }
+
+        Class<?> current = type;
+        while (current != null) {
+            Field[] fields;
+            try {
+                fields = current.getDeclaredFields();
+            } catch (Throwable error) {
+                break;
+            }
+            for (Field field : fields) {
+                if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) continue;
+                try {
+                    field.setAccessible(true);
+                    Object child = field.get(value);
+                    AudioTrack hit = findLiveAudioTrack(child, depth + 1, seen);
+                    if (hit != null) return hit;
+                } catch (Throwable ignored) {}
+            }
+            current = current.getSuperclass();
+        }
+        return null;
     }
 
     private static Object fieldValue(Object target, String name) throws Exception {
@@ -482,6 +669,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         Visualizer vis = digitalVisualizer;
         digitalVisualizer = null;
         digitalAudioSessionId = -1;
+        digitalUsingSystemMix = false;
         if (vis != null) {
             try { vis.setEnabled(false); } catch (Throwable ignored) {}
             try { vis.release(); } catch (Throwable ignored) {}
