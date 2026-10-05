@@ -3,10 +3,10 @@
   "apiVersion": 1,
   "id": "spectrum-visualizer-overlay",
   "name": "Spectrum Visualizer Overlay",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "minAndroidSdk": 26,
   "entryClass": "me.jxl.kiosk.plugins.spectrumvisualizer.SpectrumVisualizerPlugin",
-  "description": "Winamp-style spectrum overlay for Kiosk Satellite screensavers and Fotoo, with animated or microphone FFT modes.",
+  "description": "Winamp-style spectrum overlay for Kiosk Satellite screensavers and Fotoo, with animated, microphone, and digital Sendspin modes plus Home Assistant/time visibility rules.",
   "author": "Local Kiosk Satellite project",
   "license": "MIT",
   "capabilities": [
@@ -68,6 +68,41 @@
       "default": true,
       "group": "Visualizer",
       "description": "When a media player is selected, hide the visualizer unless its state is playing."
+    },
+    {
+      "key": "visibilityEntity",
+      "type": "entity",
+      "title": "Visibility entity (optional)",
+      "default": "",
+      "group": "Visibility",
+      "description": "Optional Home Assistant entity that controls whether the visualizer is allowed to appear."
+    },
+    {
+      "key": "visibilityCondition",
+      "type": "select",
+      "title": "Visibility condition",
+      "default": "Always",
+      "options": [
+        "Always",
+        "Active",
+        "Inactive",
+        "State equals",
+        "State not equals",
+        "Numeric above",
+        "Numeric below",
+        "Numeric between",
+        "Time between"
+      ],
+      "group": "Visibility",
+      "description": "Active recognizes on, true, home, playing, open, detected, occupied and present. Time between does not need an entity."
+    },
+    {
+      "key": "visibilityValue",
+      "type": "string",
+      "title": "Visibility value",
+      "default": "",
+      "group": "Visibility",
+      "description": "Value for the condition. Examples: on, 30, 10..200, or 22:00-06:00."
     },
     {
       "key": "position",
@@ -240,6 +275,9 @@
   "groups": [
     {
       "title": "Visualizer"
+    },
+    {
+      "title": "Visibility"
     },
     {
       "title": "Layout"
