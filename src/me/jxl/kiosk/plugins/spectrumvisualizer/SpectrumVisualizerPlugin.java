@@ -372,7 +372,9 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 sessionId = track.getAudioSessionId();
             }
 
-            boolean forceMix = "System output mix".equals(digitalCapture);
+            boolean forceMix =
+                    "System output mix".equals(digitalCapture) ||
+                    "Device playback".equals(digitalCapture);
             boolean forceSession = "Sendspin session".equals(digitalCapture);
             int wantedSession = forceMix ? 0 : sessionId;
 
