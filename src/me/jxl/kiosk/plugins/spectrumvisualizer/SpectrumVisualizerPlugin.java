@@ -11,11 +11,15 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
+import android.graphics.Shader;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
+import android.media.AudioTrack;
 import android.media.MediaRecorder;
+import android.media.audiofx.Visualizer;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -64,6 +68,12 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     private int barCount = 32;
     private int fps = 20;
     private int gain = 3;
+    private String colorMode = "Classic Winamp";
+    private int singleColor = Color.WHITE;
+    private int lowColor = Color.rgb(34, 197, 94);
+    private int midColor = Color.rgb(250, 204, 21);
+    private int highColor = Color.rgb(239, 68, 68);
+    private int peakColor = Color.WHITE;
     private String mediaEntity = "";
     private boolean showOnlyWhenPlaying = true;
     private String mediaState = "";
@@ -72,6 +82,8 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     private volatile boolean analyzerRunning;
     private Thread analyzerThread;
     private AudioRecord audioRecord;
+    private volatile Visualizer digitalVisualizer;
+    private volatile int digitalAudioSessionId = -1;
 
     @Override
     public synchronized void start(PluginHost host, Map<String, Object> settings) {
@@ -179,6 +191,13 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         barCount = intSetting(values, "barCount", 32, 8, 64);
         fps = intSetting(values, "fps", 20, 5, 30);
         gain = intSetting(values, "gain", 3, 1, 10);
+        String nextColorMode = stringSetting(values, "colorMode");
+        colorMode = nextColorMode.isEmpty() ? "Classic Winamp" : nextColorMode;
+        singleColor = colorSetting(values, "singleColor", Color.WHITE);
+        lowColor = colorSetting(values, "lowColor", Color.rgb(34, 197, 94));
+        midColor = colorSetting(values, "midColor", Color.rgb(250, 204, 21));
+        highColor = colorSetting(values, "highColor", Color.rgb(239, 68, 68));
+        peakColor = colorSetting(values, "peakColor", Color.WHITE);
         mediaEntity = stringSetting(values, "mediaEntity");
         showOnlyWhenPlaying =
                 values.get("showOnlyWhenPlaying") == null ||
@@ -237,6 +256,8 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         spectrumView = new SpectrumView(context);
         spectrumView.setTag("spectrum-visualizer-overlay:view");
         spectrumView.setAlpha(opacity / 100f);
+        spectrumView.setColorConfig(
+                colorMode, singleColor, lowColor, midColor, highColor, peakColor);
 
         int screenWidth = context.getResources().getDisplayMetrics().widthPixels;
         int width = Math.max(dp(220), screenWidth * widthPercent / 100);
@@ -276,6 +297,8 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         analyzerThread = new Thread(() -> {
             if ("Microphone".equals(source)) {
                 if (!runMicrophoneAnalyzer()) runAnimatedAnalyzer();
+            } else if ("Digital / Sendspin".equals(source)) {
+                runDigitalAnalyzer();
             } else {
                 runAnimatedAnalyzer();
             }
@@ -293,6 +316,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             try { record.stop(); } catch (Throwable ignored) {}
             try { record.release(); } catch (Throwable ignored) {}
         }
+        releaseDigitalVisualizer();
         Thread thread = analyzerThread;
         analyzerThread = null;
         if (thread != null) thread.interrupt();
@@ -318,6 +342,201 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             }
             sleep(sleep);
         }
+    }
+
+    /**
+     * Digital mode attaches Android's Visualizer effect directly to the
+     * AudioTrack owned by Kiosk Satellite's native Sendspin player. This is
+     * the decoded digital stream, not microphone audio, so room noise and
+     * speech do not affect the spectrum.
+     *
+     * Kiosk Satellite keeps the Sendspin bridge/session/output/track private;
+     * all four live in the same app process, so the plugin resolves that
+     * AudioTrack reflectively and attaches only to its audioSessionId.
+     */
+    private void runDigitalAnalyzer() {
+        int lastWaitingReport = 0;
+        while (analyzerRunning && spectrumView != null) {
+            AudioTrack track = resolveSendspinAudioTrack();
+            int sessionId = -1;
+            if (track != null && track.getState() == AudioTrack.STATE_INITIALIZED) {
+                sessionId = track.getAudioSessionId();
+            }
+
+            if (sessionId <= 0) {
+                releaseDigitalVisualizer();
+                SpectrumView view = spectrumView;
+                if (view != null) {
+                    view.setLevels(new float[barCount]);
+                    view.postInvalidate();
+                }
+                if (lastWaitingReport == 0 && host != null) {
+                    host.status(
+                            "Digital visualizer is waiting for Kiosk Satellite Sendspin audio.",
+                            false);
+                    lastWaitingReport = 1;
+                }
+                sleep(500);
+                continue;
+            }
+
+            if (digitalVisualizer == null || digitalAudioSessionId != sessionId) {
+                releaseDigitalVisualizer();
+                try {
+                    final Visualizer vis = new Visualizer(sessionId);
+                    int[] range = Visualizer.getCaptureSizeRange();
+                    int capture = range != null && range.length >= 2
+                            ? range[1] : 1024;
+                    vis.setCaptureSize(capture);
+                    int rate = Math.min(
+                            Visualizer.getMaxCaptureRate(),
+                            Math.max(5000, fps * 1000));
+                    vis.setDataCaptureListener(
+                            new Visualizer.OnDataCaptureListener() {
+                                @Override
+                                public void onWaveFormDataCapture(
+                                        Visualizer visualizer,
+                                        byte[] waveform,
+                                        int samplingRate) {}
+
+                                @Override
+                                public void onFftDataCapture(
+                                        Visualizer visualizer,
+                                        byte[] fft,
+                                        int samplingRate) {
+                                    if (!analyzerRunning ||
+                                            digitalVisualizer != visualizer ||
+                                            fft == null) return;
+                                    float[] bars = visualizerFftBars(
+                                            fft, samplingRate, barCount, gain);
+                                    SpectrumView view = spectrumView;
+                                    if (view != null) {
+                                        view.setLevels(bars);
+                                        view.postInvalidate();
+                                    }
+                                }
+                            },
+                            rate,
+                            false,
+                            true);
+                    vis.setEnabled(true);
+                    digitalVisualizer = vis;
+                    digitalAudioSessionId = sessionId;
+                    lastWaitingReport = 0;
+                    if (host != null) {
+                        host.status(
+                                "Digital spectrum attached to Sendspin audio session " +
+                                        sessionId + ".",
+                                false);
+                    }
+                } catch (Throwable error) {
+                    releaseDigitalVisualizer();
+                    if (host != null) {
+                        host.status(
+                                "Digital Sendspin spectrum unavailable: " +
+                                        safeMessage(error),
+                                true);
+                    }
+                    sleep(1000);
+                    continue;
+                }
+            }
+
+            // NativeAudioOutput may replace its AudioTrack between streams.
+            // Re-resolve periodically and rebuild Visualizer if the session id
+            // changes.
+            sleep(400);
+        }
+        releaseDigitalVisualizer();
+    }
+
+    private AudioTrack resolveSendspinAudioTrack() {
+        try {
+            Object app = context == null ? null : context.getApplicationContext();
+            Object bridge = fieldValue(app, "sendspin");
+            Object session = fieldValue(bridge, "session");
+            Object output = fieldValue(session, "output");
+            Object track = fieldValue(output, "track");
+            return track instanceof AudioTrack ? (AudioTrack) track : null;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static Object fieldValue(Object target, String name) throws Exception {
+        if (target == null) return null;
+        Class<?> type = target.getClass();
+        while (type != null) {
+            try {
+                Field field = type.getDeclaredField(name);
+                field.setAccessible(true);
+                return field.get(target);
+            } catch (NoSuchFieldException ignored) {
+                type = type.getSuperclass();
+            }
+        }
+        return null;
+    }
+
+    private void releaseDigitalVisualizer() {
+        Visualizer vis = digitalVisualizer;
+        digitalVisualizer = null;
+        digitalAudioSessionId = -1;
+        if (vis != null) {
+            try { vis.setEnabled(false); } catch (Throwable ignored) {}
+            try { vis.release(); } catch (Throwable ignored) {}
+        }
+    }
+
+    /**
+     * Android Visualizer FFT format contains signed 8-bit real/imaginary
+     * components. Convert its logarithmically-spaced frequency bins into the
+     * same 0..1 / roughly -60..0 dB scale used by microphone mode.
+     * samplingRate is reported by Android in milli-Hz.
+     */
+    private static float[] visualizerFftBars(
+            byte[] fft,
+            int samplingRateMilliHz,
+            int bars,
+            int gain) {
+        int n = fft.length;
+        float[] result = new float[bars];
+        if (n < 8) return result;
+
+        double sampleRate = samplingRateMilliHz > 100000
+                ? samplingRateMilliHz / 1000.0
+                : samplingRateMilliHz;
+        if (sampleRate <= 0) sampleRate = 48000.0;
+
+        double minHz = 45.0;
+        double maxHz = Math.min(16000.0, sampleRate / 2.0);
+        int maxBin = n / 2 - 1;
+
+        for (int b = 0; b < bars; b++) {
+            double lowHz = minHz * Math.pow(maxHz / minHz, b / (double) bars);
+            double highHz =
+                    minHz * Math.pow(maxHz / minHz, (b + 1) / (double) bars);
+            int low = Math.max(1, (int) Math.floor(lowHz * n / sampleRate));
+            int high = Math.min(
+                    maxBin,
+                    Math.max(low, (int) Math.ceil(highHz * n / sampleRate)));
+
+            double peak = 0.0;
+            for (int k = low; k <= high; k++) {
+                int at = k * 2;
+                if (at + 1 >= fft.length) break;
+                double re = fft[at];
+                double im = fft[at + 1];
+                double magnitude = Math.hypot(re, im) / 181.0;
+                if (magnitude > peak) peak = magnitude;
+            }
+
+            double db = 20.0 * Math.log10(Math.max(0.001, peak));
+            double normalized = (db + 60.0) / 60.0;
+            normalized *= (0.68 + gain * 0.16);
+            result[b] = clamp01((float) normalized);
+        }
+        return result;
     }
 
     private boolean runMicrophoneAnalyzer() {
@@ -667,6 +886,19 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         return Math.max(min, Math.min(max, result));
     }
 
+    private static int colorSetting(
+            Map<String, Object> values,
+            String key,
+            int fallback) {
+        String raw = stringSetting(values, key);
+        if (raw.isEmpty()) return fallback;
+        try {
+            return Color.parseColor(raw);
+        } catch (IllegalArgumentException ignored) {
+            return fallback;
+        }
+    }
+
     private static String safeMessage(Throwable error) {
         String value = error == null ? null : error.getMessage();
         return value == null || value.isEmpty()
@@ -681,11 +913,32 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         private float[] smoothed = new float[0];
         private float[] peaks = new float[0];
 
+        private String colorMode = "Classic Winamp";
+        private int singleColor = Color.WHITE;
+        private int lowColor = Color.rgb(34, 197, 94);
+        private int midColor = Color.rgb(250, 204, 21);
+        private int highColor = Color.rgb(239, 68, 68);
+        private int peakColor = Color.WHITE;
+
         SpectrumView(Context context) {
             super(context);
-            paint.setColor(Color.WHITE);
-            peakPaint.setColor(0xFFE5E5E5);
             setBackgroundColor(Color.TRANSPARENT);
+        }
+
+        void setColorConfig(
+                String mode,
+                int single,
+                int low,
+                int mid,
+                int high,
+                int peak) {
+            colorMode = mode == null || mode.isEmpty() ? "Classic Winamp" : mode;
+            singleColor = single;
+            lowColor = low;
+            midColor = mid;
+            highColor = high;
+            peakColor = peak;
+            invalidate();
         }
 
         void setLevels(float[] values) {
@@ -707,12 +960,44 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                     (getWidth() - gap * (incoming.length - 1)) / incoming.length;
             float usable = getHeight() - 8f;
 
+            Shader classicShader = null;
+            if ("Classic Winamp".equals(colorMode)) {
+                // The gradient is tied to level height: short/quiet bars stay
+                // green, medium bars reach yellow, and loud bars reach red.
+                classicShader = new LinearGradient(
+                        0f,
+                        getHeight(),
+                        0f,
+                        0f,
+                        new int[] {lowColor, midColor, highColor},
+                        new float[] {0f, 0.58f, 1f},
+                        Shader.TileMode.CLAMP);
+            }
+
+            peakPaint.setShader(null);
+            peakPaint.setColor(peakColor);
+
             for (int i = 0; i < incoming.length; i++) {
                 float target = clamp01(incoming[i]);
                 smoothed[i] = target > smoothed[i]
                         ? smoothed[i] * 0.35f + target * 0.65f
                         : smoothed[i] * 0.82f + target * 0.18f;
                 peaks[i] = Math.max(smoothed[i], peaks[i] - 0.025f);
+
+                paint.setShader(null);
+                if ("Classic Winamp".equals(colorMode)) {
+                    paint.setShader(classicShader);
+                } else if ("Rainbow".equals(colorMode)) {
+                    float hue = incoming.length <= 1
+                            ? 0f
+                            : (i * 300f / (incoming.length - 1));
+                    paint.setColor(Color.HSVToColor(new float[] {hue, 0.88f, 1f}));
+                } else if ("Level heat".equals(colorMode)) {
+                    paint.setColor(levelColor(
+                            smoothed[i], lowColor, midColor, highColor));
+                } else {
+                    paint.setColor(singleColor);
+                }
 
                 float left = i * (barWidth + gap);
                 float top = getHeight() - smoothed[i] * usable;
@@ -730,6 +1015,28 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                         peakY,
                         peakPaint);
             }
+
+            paint.setShader(null);
         }
-    }
-}
+
+        private static int levelColor(float level, int low, int mid, int high) {
+            float v = clamp01(level);
+            if (v <= 0.58f) {
+                return blend(low, mid, v / 0.58f);
+            }
+            return blend(mid, high, (v - 0.58f) / 0.42f);
+        }
+
+        private static int blend(int from, int to, float amount) {
+            float t = clamp01(amount);
+            int a = Math.round(Color.alpha(from) +
+                    (Color.alpha(to) - Color.alpha(from)) * t);
+            int r = Math.round(Color.red(from) +
+                    (Color.red(to) - Color.red(from)) * t);
+            int g = Math.round(Color.green(from) +
+                    (Color.green(to) - Color.green(from)) * t);
+            int b = Math.round(Color.blue(from) +
+                    (Color.blue(to) - Color.blue(from)) * t);
+            return Color.argb(a, r, g, b);
+        }
+    }}
