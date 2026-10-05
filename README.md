@@ -96,3 +96,6 @@ rate remain controlled here; Party controls its own visual style. When Party
 closes, screensaver/visibility rules apply again. The lease is checked even
 with debug switched off, so a crashed Party view cannot keep capture active
 forever. Animated data is marked as demo.
+
+
+Standalone Party Mode uses its own visibility. This companion yields while Party is active and resumes its normal visibility afterward. Spectrum Visualizer 0.2.11 uses Party’s gain and FPS during Party while retaining the chosen audio source.

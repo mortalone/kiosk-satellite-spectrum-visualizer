@@ -38,3 +38,4 @@ public interface PluginHost {
     default void publishSelect(String key, String name, String[] options, String state) { throw new UnsupportedOperationException("SDK 1 required"); }
     default void removeSelect(String key) { throw new UnsupportedOperationException("SDK 1 required"); }
 }
+
