@@ -3,7 +3,7 @@
   "apiVersion": 1,
   "id": "spectrum-visualizer-overlay",
   "name": "Spectrum Visualizer Overlay",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "minAndroidSdk": 26,
   "entryClass": "me.jxl.kiosk.plugins.spectrumvisualizer.SpectrumVisualizerPlugin",
   "description": "Winamp-style spectrum overlay for Kiosk Satellite screensavers and Fotoo, with animated, microphone, and digital Sendspin modes plus Home Assistant/time visibility rules.",
@@ -30,28 +30,17 @@
     {
       "key": "source",
       "type": "select",
-      "title": "Visualizer source",
+      "title": "Visualizer source / capture",
       "default": "Animated",
       "options": [
         "Animated",
         "Microphone",
-        "Digital / Sendspin"
-      ],
-      "group": "Visualizer",
-      "description": "Animated is decorative. Microphone analyzes room audio. Digital / Sendspin attaches to Kiosk Satellite's Sendspin AudioTrack and analyzes the decoded digital stream."
-    },
-    {
-      "key": "digitalCapture",
-      "type": "select",
-      "title": "Digital capture method",
-      "default": "Auto",
-      "options": [
-        "Auto",
-        "Sendspin session",
+        "Digital / Sendspin",
+        "Sendspin - Session",
         "Device playback"
       ],
       "group": "Visualizer",
-      "description": "Auto uses the Sendspin audio session first and can fall back to device playback capture. Microphone input is not used."
+      "description": "Animated is decorative. Microphone uses room audio. Digital / Sendspin automatically captures the Sendspin session with device playback fallback. Sendspin - Session and Device playback force that digital method."
     },
     {
       "key": "mediaEntity",
@@ -70,12 +59,39 @@
       "description": "When a media player is selected, hide the visualizer unless its state is playing."
     },
     {
-      "key": "visibilityRule",
-      "type": "string",
-      "title": "Visibility rule (optional)",
+      "key": "visibilityEntity",
+      "type": "entity",
+      "title": "Visibility entity (optional)",
       "default": "",
       "group": "Visibility",
-      "description": "Format: entity|condition|value. Examples: binary_sensor.motion|Active, sensor.lux|Numeric below|30, or time|Time between|22:00-06:00. Leave empty for Always."
+      "description": "Home Assistant entity used for the visibility condition. Not needed for Always or Time between."
+    },
+    {
+      "key": "visibilityCondition",
+      "type": "select",
+      "title": "Visibility condition",
+      "default": "Always",
+      "options": [
+        "Always",
+        "Active",
+        "Inactive",
+        "State equals",
+        "State not equals",
+        "Numeric above",
+        "Numeric below",
+        "Numeric between",
+        "Time between"
+      ],
+      "group": "Visibility",
+      "description": "Choose when the visualizer may appear. The screensaver and optional playing gate still apply."
+    },
+    {
+      "key": "visibilityValue",
+      "type": "string",
+      "title": "Visibility value (optional)",
+      "default": "",
+      "group": "Visibility",
+      "description": "Comparison state or number. Numeric between: 18..24. Time between: 22:00-06:00. Leave empty for Always, Active or Inactive."
     },
     {
       "key": "position",
@@ -150,27 +166,15 @@
       "description": "Number of frequency bands."
     },
     {
-      "key": "fps",
-      "type": "number",
-      "title": "Refresh rate",
-      "default": 20,
-      "min": 5,
-      "max": 30,
-      "step": 5,
-      "unit": "fps",
-      "group": "Spectrum",
-      "description": "Target redraw rate."
-    },
-    {
       "key": "gain",
       "type": "number",
-      "title": "Microphone gain",
+      "title": "Visualizer gain",
       "default": 3,
       "min": 1,
       "max": 10,
       "step": 1,
       "group": "Spectrum",
-      "description": "Visual gain applied to microphone FFT levels."
+      "description": "Visual strength applied to microphone and digital FFT bars. Does not change playback volume; cannot recover audio when Android captures silence."
     },
     {
       "key": "colorMode",
@@ -251,6 +255,18 @@
     {
       "id": "hideDebug",
       "title": "Hide debug overlay"
+    },
+    {
+      "id": "refreshSlow",
+      "title": "Refresh rate: 10 FPS (low CPU)"
+    },
+    {
+      "id": "refreshNormal",
+      "title": "Refresh rate: 20 FPS (default)"
+    },
+    {
+      "id": "refreshFast",
+      "title": "Refresh rate: 30 FPS (smooth)"
     }
   ],
   "groups": [

@@ -71,7 +71,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     private int edgeOffsetDp = 24;
     private int opacity = 85;
     private int barCount = 32;
-    private int fps = 20;
+    private volatile int fps = 20;
     private int gain = 3;
     private String colorMode = "Classic Winamp";
     private int singleColor = Color.WHITE;
@@ -171,9 +171,22 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         } else if ("hide".equals(command)) {
             forcePreview = false;
             main.post(this::hideVisualizer);
+        } else if ("refreshSlow".equals(command)) {
+            setRefreshRate(10);
+        } else if ("refreshNormal".equals(command)) {
+            setRefreshRate(20);
+        } else if ("refreshFast".equals(command)) {
+            setRefreshRate(30);
         } else {
             throw new IllegalArgumentException("Unknown command: " + command);
         }
+    }
+
+    private void setRefreshRate(int value) {
+        fps = value;
+        context.getSharedPreferences("spectrum_visualizer_preferences", Context.MODE_PRIVATE)
+                .edit().putInt("fps", value).apply();
+        host.status("Visualizer refresh rate: " + value + " FPS (saved).", false);
     }
 
     @Override
@@ -241,6 +254,14 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
 
         String nextSource = stringSetting(values, "source");
         source = nextSource.isEmpty() ? "Animated" : nextSource;
+        digitalCapture = "Auto";
+        if ("Sendspin - Session".equals(source)) {
+            source = "Digital / Sendspin";
+            digitalCapture = "Sendspin session";
+        } else if ("Device playback".equals(source)) {
+            source = "Digital / Sendspin";
+            digitalCapture = "Device playback";
+        }
         String nextPosition = stringSetting(values, "position");
         position = nextPosition.isEmpty() ? "Bottom" : nextPosition;
         widthPercent = intSetting(values, "widthPercent", 70, 30, 100);
@@ -248,12 +269,11 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         edgeOffsetDp = intSetting(values, "edgeOffset", 24, 0, 300);
         opacity = intSetting(values, "opacity", 85, 20, 100);
         barCount = intSetting(values, "barCount", 32, 8, 64);
-        fps = intSetting(values, "fps", 20, 5, 30);
+        fps = Math.max(5, Math.min(30, context.getSharedPreferences(
+                "spectrum_visualizer_preferences", Context.MODE_PRIVATE).getInt("fps", 20)));
         gain = intSetting(values, "gain", 3, 1, 10);
         String nextColorMode = stringSetting(values, "colorMode");
         colorMode = nextColorMode.isEmpty() ? "Classic Winamp" : nextColorMode;
-        String nextDigitalCapture = stringSetting(values, "digitalCapture");
-        digitalCapture = nextDigitalCapture.isEmpty() ? "Auto" : nextDigitalCapture;
         singleColor = colorSetting(values, "singleColor", Color.WHITE);
         lowColor = colorSetting(values, "lowColor", Color.rgb(34, 197, 94));
         midColor = colorSetting(values, "midColor", Color.rgb(250, 204, 21));
@@ -263,7 +283,9 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         showOnlyWhenPlaying =
                 values.get("showOnlyWhenPlaying") == null ||
                 Boolean.TRUE.equals(values.get("showOnlyWhenPlaying"));
-        applyVisibilityRule(stringSetting(values, "visibilityRule"));
+        visibilityEntity = stringSetting(values, "visibilityEntity");
+        visibilityCondition = canonicalVisibilityCondition(stringSetting(values, "visibilityCondition"));
+        visibilityValue = stringSetting(values, "visibilityValue");
 
         Set<String> wanted = new HashSet<>();
         if (!mediaEntity.isEmpty()) wanted.add(mediaEntity);
@@ -291,38 +313,6 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             updatePresentation();
             restartDebugOverlay();
         });
-    }
-
-    private void applyVisibilityRule(String raw) {
-        visibilityEntity = "";
-        visibilityCondition = "Always";
-        visibilityValue = "";
-
-        if (raw == null || raw.trim().isEmpty()) return;
-
-        String[] parts = raw.split("\\|", -1);
-        if (parts.length < 2) {
-            visibilityEntity = raw.trim();
-            visibilityCondition = "Active";
-            return;
-        }
-
-        String entity = parts[0].trim();
-        String condition = canonicalVisibilityCondition(parts[1]);
-        StringBuilder value = new StringBuilder();
-        for (int i = 2; i < parts.length; i++) {
-            if (i > 2) value.append('|');
-            value.append(parts[i]);
-        }
-
-        visibilityCondition = condition;
-        visibilityValue = value.toString().trim();
-
-        if (!"Time between".equals(condition) &&
-                !"time".equalsIgnoreCase(entity) &&
-                !"@time".equalsIgnoreCase(entity)) {
-            visibilityEntity = entity;
-        }
     }
 
     private static String canonicalVisibilityCondition(String raw) {
@@ -517,7 +507,6 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
 
     private void runAnimatedAnalyzer() {
         double phase = 0;
-        long sleep = Math.max(33, 1000L / Math.max(1, fps));
         while (analyzerRunning && spectrumView != null) {
             float[] bars = new float[barCount];
             for (int i = 0; i < bars.length; i++) {
@@ -533,7 +522,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 view.setLevels(bars);
                 view.postInvalidate();
             }
-            sleep(sleep);
+            sleep(Math.max(33L, 1000L / Math.max(1, fps)));
         }
     }
 
@@ -550,7 +539,6 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     private void runDigitalAnalyzer() {
         long noSignalSince = android.os.SystemClock.elapsedRealtime();
         int lastReportedSession = Integer.MIN_VALUE;
-        long frameMs = Math.max(33L, 1000L / Math.max(1, fps));
 
         while (analyzerRunning && spectrumView != null) {
             AudioTrack track = resolveSendspinAudioTrack();
@@ -619,7 +607,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 zeroDigitalBars();
             }
 
-            sleep(frameMs);
+            sleep(Math.max(33L, 1000L / Math.max(1, fps)));
         }
         releaseDigitalVisualizer();
     }
@@ -740,7 +728,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                         0L,
                         android.os.SystemClock.elapsedRealtime() -
                                 digitalLastFrameAtMs);
-        return "Spectrum 0.2.7 | " + source + " | " + digitalCapture +
+        return "Spectrum 0.2.8 | " + source + " | " + digitalCapture + " | " + fps + " FPS | gain=" + gain +
                     "\n" + trackInfo +
                     "; attachedSession=" + digitalAudioSessionId +
                     "; systemMix=" + digitalUsingSystemMix +
@@ -1084,7 +1072,6 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         short[] pcm = new short[fftSize];
         double[] real = new double[fftSize];
         double[] imag = new double[fftSize];
-        long frameMs = Math.max(33, 1000L / Math.max(1, fps));
 
         try {
             while (analyzerRunning && spectrumView != null) {
@@ -1110,7 +1097,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                     view.setLevels(bars);
                     view.postInvalidate();
                 }
-                sleep(frameMs);
+                sleep(Math.max(33L, 1000L / Math.max(1, fps)));
             }
             return true;
         } catch (Throwable error) {

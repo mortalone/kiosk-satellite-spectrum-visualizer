@@ -1,9 +1,13 @@
-# Spectrum Visualizer Overlay 0.2.7
+# Spectrum Visualizer Overlay 0.2.8
 
-- Discover live playback AudioTracks through Kiosk Satellite's EchoReference track registry in addition to app and activity object graphs. This supports release builds where private app bridge-holder fields are unavailable.
-- Read the registry without consuming echo-reference samples or changing playback.
-- Show application class, app-path failure, echo source count and successful discovery location in the persistent debug panel.
-- Cache live tracks and limit unresolved discovery to once per second; bound graph traversal.
-- Add a regression check for live static and singleton-backed registries, preserving audio samples.
+- Restore three visibility settings: entity picker, condition selector and comparison value.
+- Combine source and digital capture into one selector. Digital / Sendspin is Auto; Sendspin - Session and Device playback force the selected method.
+- Rename Microphone gain to Visualizer gain: it already applies to both microphone and digital FFT levels, without changing playback volume.
+- Move refresh rate to actions for 10, 20 and 30 FPS. Changes apply to the running analyzer without restarting capture and are saved across plugin/app restarts.
+- Include refresh rate and visual gain in the debug panel.
 
-20 settings and 6 commands are unchanged. Digital audio capture still uses Android Visualizer, not the microphone. The new discovery path requires verification on the affected kiosk.
+Still within the host limit: 20 settings and 9 commands.
+
+Upgrade: existing source, gain, colors, layout and media-player gate are preserved. Re-enter any old compact visibility rule in the three new fields; the condition defaults to Always. Refresh defaults to 20 FPS until an action is chosen. Any previous forced Digital capture method must be reselected using the combined source field.
+
+Capture remains Android Visualizer in normalized mode. This update does not provide pre-volume PCM capture or guarantee visualization while the device is muted.
