@@ -99,3 +99,10 @@ forever. Animated data is marked as demo.
 
 
 Standalone Party Mode uses its own visibility. This companion yields while Party is active and resumes its normal visibility afterward. Spectrum Visualizer 0.2.11 uses Party’s gain and FPS during Party while retaining the chosen audio source.
+
+### Diagnostics · 0.2.12
+
+The top diagnostic panel is hidden by default. Press the **Show Debug** or
+**Digital Status** plugin action when troubleshooting; **Hide Debug** removes it.
+These actions can be placed as Kiosk buttons. Digital/Sendspin selection alone
+no longer opens the panel.

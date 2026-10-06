@@ -115,9 +115,9 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     private volatile String digitalLastError = "";
     private volatile int digitalWaveformPeak = 0;
     private volatile double digitalWaveformRms = 0;
-    // Enabled on startup for digital mode while diagnosing device capture.
+    // Diagnostics appear only after an explicit action.
     // Commands toggle it without consuming another manifest setting.
-    private boolean debugEnabled = true;
+    private boolean debugEnabled = false;
     private boolean debugRequested;
     private TextView debugView;
     private final Runnable debugTick = new Runnable() {
@@ -172,6 +172,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             main.post(this::restartDebugOverlay);
         } else if ("hideDebug".equals(command)) {
             debugEnabled = false;
+            debugRequested = false;
             main.post(() -> {
                 main.removeCallbacks(debugTick);
                 removeOverlayView(debugView);
@@ -772,7 +773,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                         0L,
                         android.os.SystemClock.elapsedRealtime() -
                                 digitalLastFrameAtMs);
-        return "Spectrum 0.2.11 | " + source + " | " + digitalCapture + " | " + fps + " FPS | gain=" + gain +
+        return "Spectrum 0.2.12 | " + source + " | " + digitalCapture + " | " + fps + " FPS | gain=" + gain +
                     "\n" + trackInfo +
                     "; attachedSession=" + digitalAudioSessionId +
                     "; systemMix=" + digitalUsingSystemMix +
@@ -818,7 +819,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         removeOverlayView(debugView);
         debugView = null;
         if (host != null && debugEnabled &&
-                (debugRequested || "Digital / Sendspin".equals(source))) {
+                debugRequested) {
             debugTick.run();
         }
     }
