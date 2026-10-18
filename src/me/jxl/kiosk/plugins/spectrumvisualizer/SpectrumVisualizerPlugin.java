@@ -115,6 +115,22 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     private volatile String digitalLastError = "";
     private volatile int digitalWaveformPeak = 0;
     private volatile double digitalWaveformRms = 0;
+    private static final class DelayedFrame {
+        final long capturedAtMs;
+        final float[] bars;
+        final float[] wave;
+        DelayedFrame(long capturedAtMs, float[] bars, float[] wave) {
+            this.capturedAtMs = capturedAtMs;
+            this.bars = bars;
+            this.wave = wave;
+        }
+    }
+    private final SpeakerSync speakerSync = new SpeakerSync(android.os.SystemClock::elapsedRealtime);
+    private final java.util.ArrayDeque<DelayedFrame> delayedFrames = new java.util.ArrayDeque<>();
+    private volatile long lastActiveSignalAtMs = 0L;
+    private volatile int lastTrackHeadPos = -1;
+    private volatile int lastPersistedUgpDelayMs = 0;
+    private volatile boolean sourceForcesNoSync = false;
     // Diagnostics appear only after an explicit action.
     // Commands toggle it without consuming another manifest setting.
     private boolean debugEnabled = false;
@@ -187,6 +203,16 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             setRefreshRate(20);
         } else if ("refreshFast".equals(command)) {
             setRefreshRate(30);
+        } else if ("syncAuto".equals(command)) {
+            setSyncSpeakerPref("auto");
+        } else if ("syncOff".equals(command)) {
+            setSyncSpeakerPref("off");
+        } else if ("syncMinus100".equals(command)) {
+            stepSyncOffsetPref(-100);
+        } else if ("syncZero".equals(command)) {
+            setSyncOffsetPref(0);
+        } else if ("syncPlus100".equals(command)) {
+            stepSyncOffsetPref(100);
         } else {
             throw new IllegalArgumentException("Unknown command: " + command);
         }
@@ -197,6 +223,32 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         context.getSharedPreferences("spectrum_visualizer_preferences", Context.MODE_PRIVATE)
                 .edit().putInt("fps", value).apply();
         host.status("Visualizer refresh rate: " + value + " FPS (saved).", false);
+    }
+
+    private void setSyncSpeakerPref(String spec) {
+        context.getSharedPreferences("spectrum_visualizer_preferences", Context.MODE_PRIVATE)
+                .edit().putString("sync_speaker", spec).apply();
+        speakerSync.setTargetSpec(sourceForcesNoSync ? "off" : spec);
+        if (SpeakerSync.isOffSpec(spec)) clearDelayedFrames();
+        if (host != null) {
+            host.status("Speaker sync target: " + spec + " (saved).", false);
+        }
+    }
+
+    private void stepSyncOffsetPref(int deltaMs) {
+        int current = context.getSharedPreferences("spectrum_visualizer_preferences", Context.MODE_PRIVATE)
+                .getInt("sync_offset_ms", 0);
+        setSyncOffsetPref(Math.max(-5000, Math.min(5000, current + deltaMs)));
+    }
+
+    private void setSyncOffsetPref(int offsetMs) {
+        int clamped = Math.max(-5000, Math.min(5000, offsetMs));
+        context.getSharedPreferences("spectrum_visualizer_preferences", Context.MODE_PRIVATE)
+                .edit().putInt("sync_offset_ms", clamped).apply();
+        speakerSync.setManualOffsetMs(clamped);
+        if (host != null) {
+            host.status("Speaker sync fine-tune offset: " + clamped + " ms (saved).", false);
+        }
     }
 
     @Override
@@ -267,13 +319,26 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         String nextSource = stringSetting(values, "source");
         source = nextSource.isEmpty() ? "Animated" : nextSource;
         digitalCapture = "Auto";
-        if ("Sendspin - Session".equals(source)) {
+        sourceForcesNoSync = false;
+        if ("Digital / Sendspin (no speaker sync)".equals(source)) {
+            source = "Digital / Sendspin";
+            sourceForcesNoSync = true;
+        } else if ("Sendspin - Session".equals(source)) {
             source = "Digital / Sendspin";
             digitalCapture = "Sendspin session";
         } else if ("Device playback".equals(source)) {
             source = "Digital / Sendspin";
             digitalCapture = "Device playback";
         }
+        android.content.SharedPreferences visPrefs = context.getSharedPreferences(
+                "spectrum_visualizer_preferences", Context.MODE_PRIVATE);
+        String savedSyncSpeaker = visPrefs.getString("sync_speaker", "auto");
+        int savedSyncOffset = visPrefs.getInt("sync_offset_ms", 0);
+        int savedUgpDelay = visPrefs.getInt("last_ugp_delay_ms", SpeakerSync.DEFAULT_UGP_DELAY_MS);
+        speakerSync.setFallbackUgpDelayMs(savedUgpDelay);
+        speakerSync.setManualOffsetMs(savedSyncOffset);
+        speakerSync.setTargetSpec(sourceForcesNoSync ? "off" : savedSyncSpeaker);
+
         String nextPosition = stringSetting(values, "position");
         position = nextPosition.isEmpty() ? "Bottom" : nextPosition;
         widthPercent = intSetting(values, "widthPercent", 70, 30, 100);
@@ -281,8 +346,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         edgeOffsetDp = intSetting(values, "edgeOffset", 24, 0, 300);
         opacity = intSetting(values, "opacity", 85, 20, 100);
         barCount = intSetting(values, "barCount", 32, 8, 64);
-        fps = Math.max(5, Math.min(30, context.getSharedPreferences(
-                "spectrum_visualizer_preferences", Context.MODE_PRIVATE).getInt("fps", 20)));
+        fps = Math.max(5, Math.min(30, visPrefs.getInt("fps", 20)));
         gain = intSetting(values, "gain", 3, 1, 10);
         String nextColorMode = stringSetting(values, "colorMode");
         colorMode = nextColorMode.isEmpty() ? "Classic Winamp" : nextColorMode;
@@ -440,6 +504,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
 
     private void updatePresentation() {
         main.removeCallbacks(partyWatchdog);
+        refreshSyncPreferences();
         if (partyAudioRequested()) {
             android.content.SharedPreferences presentation = partyPreferences();
             partyGain = Math.max(1, Math.min(10, presentation.getInt("gain", gain)));
@@ -464,6 +529,22 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         }
         ensureVisualizer();
         startAnalyzer();
+    }
+
+    private void refreshSyncPreferences() {
+        if (context == null) return;
+        android.content.SharedPreferences visPrefs = context.getSharedPreferences(
+                "spectrum_visualizer_preferences", Context.MODE_PRIVATE);
+        String savedSyncSpeaker = visPrefs.getString("sync_speaker", "auto");
+        int savedSyncOffset = visPrefs.getInt("sync_offset_ms", 0);
+        speakerSync.setManualOffsetMs(savedSyncOffset);
+        speakerSync.setTargetSpec(sourceForcesNoSync ? "off" : savedSyncSpeaker);
+    }
+
+    private void clearDelayedFrames() {
+        synchronized (delayedFrames) {
+            delayedFrames.clear();
+        }
     }
 
     private void ensureVisualizer() {
@@ -514,6 +595,10 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             return;
         }
         analyzerRunning = true;
+        if ("Digital / Sendspin".equals(source)) {
+            clearDelayedFrames();
+            speakerSync.start();
+        }
         analyzerThread = new Thread(() -> {
             if ("Microphone".equals(source)) {
                 if (!runMicrophoneAnalyzer()) runAnimatedAnalyzer();
@@ -530,6 +615,10 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
 
     private void stopAnalyzer() {
         analyzerRunning = false;
+        speakerSync.stop();
+        clearDelayedFrames();
+        lastActiveSignalAtMs = 0L;
+        lastTrackHeadPos = -1;
         AudioRecord record = audioRecord;
         audioRecord = null;
         if (record != null) {
@@ -625,7 +714,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             // callback capture as two separate supported modes; some OEM
             // builds attach the effect successfully but never dispatch the
             // callback listener.
-            boolean gotFrame = pollDigitalVisualizer();
+            boolean gotFrame = pollDigitalVisualizer(track);
             long now = android.os.SystemClock.elapsedRealtime();
             if (gotFrame) {
                 noSignalSince = now;
@@ -689,7 +778,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         }
     }
 
-    private boolean pollDigitalVisualizer() {
+    private boolean pollDigitalVisualizer(AudioTrack track) {
         Visualizer vis = digitalVisualizer;
         if (vis == null || !analyzerRunning) return false;
         try {
@@ -705,7 +794,8 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
 
             int samplingRate = vis.getSamplingRate();
             digitalSamplingRateMilliHz = samplingRate;
-            digitalLastFrameAtMs = android.os.SystemClock.elapsedRealtime();
+            long now = android.os.SystemClock.elapsedRealtime();
+            digitalLastFrameAtMs = now;
             int peak = 0;
             double sumSquares = 0;
             for (byte value : digitalWaveform) {
@@ -717,11 +807,38 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             digitalWaveformRms = Math.sqrt(sumSquares / digitalWaveform.length);
             digitalLastError = "";
 
+            int headPos = -1;
+            double headSec = Double.NaN;
+            if (track != null) {
+                try {
+                    headPos = track.getPlaybackHeadPosition();
+                    int rate = track.getSampleRate();
+                    if (headPos >= 0 && rate > 0) headSec = headPos / (double) rate;
+                } catch (Throwable ignored) {}
+            }
+
+            if (peak > 2) {
+                boolean resumedAfterSilence = lastActiveSignalAtMs == 0L || (now - lastActiveSignalAtMs >= 450L);
+                boolean headReset = headPos >= 0 && lastTrackHeadPos > 0 && headPos + 2048 < lastTrackHeadPos;
+                if (resumedAfterSilence || headReset) {
+                    speakerSync.onStreamStart(now, headSec);
+                    clearDelayedFrames();
+                }
+                lastActiveSignalAtMs = now;
+                if (headPos >= 0) lastTrackHeadPos = headPos;
+            } else if (lastActiveSignalAtMs > 0L && now - lastActiveSignalAtMs > 2200L) {
+                speakerSync.onStreamStop();
+                clearDelayedFrames();
+                lastActiveSignalAtMs = 0L;
+            }
+
+            persistSpeakerSyncStateIfNeeded();
+
             float[] bars = waveformSpectrumBars(
                     digitalWaveform, samplingRate, barCount, analyzerGain());
             float[] wave = new float[Math.min(128, digitalWaveform.length)];
             for (int i = 0; i < wave.length; i++) wave[i] = ((digitalWaveform[i * digitalWaveform.length / wave.length] & 0xff) - 128) / 128f;
-            publishFrame(bars, wave, false);
+            publishDigitalFrame(bars, wave, now);
             return true;
         } catch (Throwable error) {
             digitalLastPollResult = Integer.MIN_VALUE + 1;
@@ -730,7 +847,75 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         }
     }
 
+    private void publishDigitalFrame(float[] bars, float[] wave, long nowMs) {
+        int delayMs = speakerSync.getEffectiveDelayMs();
+        if (delayMs <= 20) {
+            clearDelayedFrames();
+            publishFrame(bars, wave, false);
+            return;
+        }
+        DelayedFrame due = null;
+        boolean waitingForInitialBuffer = false;
+        synchronized (delayedFrames) {
+            delayedFrames.addLast(new DelayedFrame(nowMs, bars, wave));
+            while (delayedFrames.size() > 360) {
+                delayedFrames.pollFirst();
+            }
+            while (!delayedFrames.isEmpty() &&
+                    delayedFrames.peekFirst().capturedAtMs + delayMs <= nowMs) {
+                due = delayedFrames.pollFirst();
+            }
+            if (due == null && !delayedFrames.isEmpty()) {
+                waitingForInitialBuffer = true;
+            }
+        }
+        if (due != null) {
+            publishFrame(due.bars, due.wave, false);
+        } else if (waitingForInitialBuffer) {
+            publishFrame(new float[barCount], new float[0], false);
+        }
+    }
+
+    private volatile int lastPersistedSpeakerCount = -1;
+    private volatile String lastPersistedSyncSummary = "";
+
+    private void persistSpeakerSyncStateIfNeeded() {
+        if (context == null) return;
+        int measured = speakerSync.getMeasuredDelayMs();
+        java.util.List<SpeakerSync.SpeakerInfo> speakers = speakerSync.getDiscoveredSpeakers();
+        String summary = speakerSync.getState() + "|" + speakerSync.getActiveSpeakerName() + "|" + speakerSync.getEffectiveDelayMs();
+        boolean lockChanged = "LOCKED".equals(speakerSync.getState()) &&
+                measured >= SpeakerSync.MIN_VALID_DELAY_MS &&
+                measured != lastPersistedUgpDelayMs;
+        boolean speakersChanged = speakers.size() != lastPersistedSpeakerCount;
+        boolean summaryChanged = !summary.equals(lastPersistedSyncSummary);
+        if (!lockChanged && !speakersChanged && !summaryChanged) return;
+        try {
+            android.content.SharedPreferences.Editor ed = context.getSharedPreferences(
+                    "spectrum_visualizer_preferences", Context.MODE_PRIVATE).edit();
+            if (lockChanged) {
+                lastPersistedUgpDelayMs = measured;
+                ed.putInt("last_ugp_delay_ms", measured);
+            }
+            if (speakersChanged) {
+                lastPersistedSpeakerCount = speakers.size();
+                StringBuilder sb = new StringBuilder();
+                for (SpeakerSync.SpeakerInfo s : speakers) {
+                    if (sb.length() > 0) sb.append('\n');
+                    sb.append(s.uuid).append('\t').append(s.name).append('\t').append(s.ip);
+                }
+                ed.putString("discovered_speakers", sb.toString());
+            }
+            if (summaryChanged) {
+                lastPersistedSyncSummary = summary;
+                ed.putString("sync_status_summary", summary);
+            }
+            ed.apply();
+        } catch (Throwable ignored) {}
+    }
+
     private void zeroDigitalBars() {
+        clearDelayedFrames();
         publishFrame(new float[barCount], new float[0], false);
     }
 
@@ -773,13 +958,17 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                         0L,
                         android.os.SystemClock.elapsedRealtime() -
                                 digitalLastFrameAtMs);
-        return "Spectrum 0.2.12 | " + source + " | " + digitalCapture + " | " + fps + " FPS | gain=" + gain +
+        return "Spectrum 0.2.13 | " + source + " | " + digitalCapture + " | " + fps + " FPS | gain=" + gain +
                     "\n" + trackInfo +
                     "; attachedSession=" + digitalAudioSessionId +
                     "; systemMix=" + digitalUsingSystemMix +
                     "; pollResult=" + digitalLastPollResult +
                     "; sampleRateMilliHz=" + digitalSamplingRateMilliHz +
                     "; lastFrameAgeMs=" + age +
+                    "\nsync=" + speakerSync.getTargetSpec() +
+                    " (" + speakerSync.getState() +
+                    ", speaker=" + (speakerSync.getActiveSpeakerName().isEmpty() ? "none" : speakerSync.getActiveSpeakerName()) +
+                    ", delay=" + speakerSync.getEffectiveDelayMs() + "ms)" +
                     "\n" + discoveryStatus +
                     "\npeak=" + digitalWaveformPeak + "; rms=" +
                     String.format(java.util.Locale.ROOT, "%.1f", digitalWaveformRms) +
@@ -802,7 +991,8 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             host.publishStatusTile("digital_source", "Spectrum digital source",
                     digitalLastFrameAtMs <= 0 ? "warn" : "on",
                     "session=" + digitalAudioSessionId + "; poll=" + digitalLastPollResult +
-                    "; peak=" + digitalWaveformPeak + "; overlay=" + overlayActive());
+                    "; peak=" + digitalWaveformPeak + "; sync=" + speakerSync.getEffectiveDelayMs() + "ms" +
+                    "; overlay=" + overlayActive());
         } catch (Throwable error) { logDiagnosticFailure(error); }
         debugEnabled = true;
         debugRequested = true;

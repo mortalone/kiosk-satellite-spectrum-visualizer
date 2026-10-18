@@ -3,10 +3,10 @@
   "apiVersion": 1,
   "id": "spectrum-visualizer-overlay",
   "name": "Spectrum Visualizer Overlay",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "minAndroidSdk": 26,
   "entryClass": "me.jxl.kiosk.plugins.spectrumvisualizer.SpectrumVisualizerPlugin",
-  "description": "Winamp-style spectrum overlay for Kiosk Satellite screensavers and Fotoo, with animated, microphone, and digital Sendspin modes plus Home Assistant/time visibility rules.",
+  "description": "Winamp-style spectrum overlay for Kiosk Satellite screensavers and Fotoo, with animated, microphone, and UPnP-synchronized digital Sendspin modes plus Home Assistant/time visibility rules.",
   "author": "Local Kiosk Satellite project",
   "license": "MIT",
   "capabilities": [
@@ -36,11 +36,12 @@
         "Animated",
         "Microphone",
         "Digital / Sendspin",
+        "Digital / Sendspin (no speaker sync)",
         "Sendspin - Session",
         "Device playback"
       ],
       "group": "Visualizer",
-      "description": "Animated is decorative. Microphone uses room audio. Digital / Sendspin automatically captures the Sendspin session with device playback fallback. Sendspin - Session and Device playback force that digital method."
+      "description": "Animated is decorative. Microphone uses room audio. Digital / Sendspin automatically captures the Sendspin session and synchronizes buffer delay with active Sonos/UPnP speakers. Digital / Sendspin (no speaker sync) disables speaker buffer delay."
     },
     {
       "key": "mediaEntity",
@@ -267,6 +268,26 @@
     {
       "id": "refreshFast",
       "title": "Refresh rate: 30 FPS (smooth)"
+    },
+    {
+      "id": "syncAuto",
+      "title": "Speaker sync: Auto Sonos/UPnP (saved)"
+    },
+    {
+      "id": "syncOff",
+      "title": "Speaker sync: Off / 0 ms (saved)"
+    },
+    {
+      "id": "syncMinus100",
+      "title": "Speaker sync fine-tune: -100 ms (saved)"
+    },
+    {
+      "id": "syncZero",
+      "title": "Speaker sync fine-tune: 0 ms (saved)"
+    },
+    {
+      "id": "syncPlus100",
+      "title": "Speaker sync fine-tune: +100 ms (saved)"
     }
   ],
   "groups": [

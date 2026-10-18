@@ -28,5 +28,6 @@ public final class AudioRegistrySnapshotTest {
         if (AudioRegistrySnapshot.readSources(InstanceRegistry.class) != InstanceRegistry.INSTANCE.sources)
             throw new AssertionError("Instance-backed registry not supported");
         System.out.println("Audio registry regression checks passed");
+        SpeakerSyncTest.main(args);
     }
 }
