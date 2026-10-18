@@ -62,6 +62,15 @@ with tempfile.TemporaryDirectory(prefix=f'ks-{manifest["id"]}-') as td:
                     "-d", str(classes),
                     *map(str, sorted(source_root.rglob("*.java")))], check=True)
 
+    test_file = project / "tests" / "SpeakerSyncTest.java"
+    if test_file.is_file():
+        test_classes = td / "test-classes"
+        test_classes.mkdir()
+        subprocess.run(["javac", "--release", "8", "-cp", str(classes),
+                        "-d", str(test_classes), str(test_file)], check=True)
+        subprocess.run(["java", "-cp", os.pathsep.join([str(classes), str(test_classes)]),
+                        "me.jxl.kiosk.plugins.spectrumvisualizer.SpeakerSyncTest"], check=True)
+
     subprocess.run([str(d8), "--min-api", str(manifest["minAndroidSdk"]),
                     "--lib", str(platform), "--classpath", str(sdk_jar),
                     "--output", str(dex),
