@@ -71,6 +71,47 @@ public final class SpeakerSyncTest {
         if (sync.getEffectiveDelayMs() != 120)
             throw new AssertionError("Expected manual offset only when target is off");
 
-        System.out.println("SpeakerSync regression checks passed");
+        // Verify granular screensaver targeting
+        String combo = "Webside + HA Media (Familie Album & Nature Frame)";
+        if (!SpectrumVisualizerPlugin.isKioskScreensaverAllowed(combo, true, "website"))
+            throw new AssertionError("Combo must allow website");
+        if (!SpectrumVisualizerPlugin.isKioskScreensaverAllowed(combo, true, "Home Assistant Media"))
+            throw new AssertionError("Combo must allow HA Media");
+        if (!SpectrumVisualizerPlugin.isKioskScreensaverAllowed(combo, true, "home_assistant_media"))
+            throw new AssertionError("Combo must allow home_assistant_media");
+        if (SpectrumVisualizerPlugin.isKioskScreensaverAllowed(combo, true, "clock"))
+            throw new AssertionError("Combo must reject clock");
+        if (SpectrumVisualizerPlugin.isKioskScreensaverAllowed(combo, true, "black"))
+            throw new AssertionError("Combo must reject black");
+        if (SpectrumVisualizerPlugin.isKioskScreensaverAllowed(combo, false, "website"))
+            throw new AssertionError("Inactive screensaver must not be allowed");
+
+        String webOnly = "Kun Webside (Familie Album)";
+        if (!SpectrumVisualizerPlugin.isKioskScreensaverAllowed(webOnly, true, "website"))
+            throw new AssertionError("Web-only must allow website");
+        if (SpectrumVisualizerPlugin.isKioskScreensaverAllowed(webOnly, true, "home_assistant_media"))
+            throw new AssertionError("Web-only must reject HA media");
+
+        String mediaOnly = "Kun Home Assistant Media (Nature Frame)";
+        if (!SpectrumVisualizerPlugin.isKioskScreensaverAllowed(mediaOnly, true, "home_assistant_media"))
+            throw new AssertionError("Media-only must allow HA media");
+        if (SpectrumVisualizerPlugin.isKioskScreensaverAllowed(mediaOnly, true, "website"))
+            throw new AssertionError("Media-only must reject website");
+
+        // Fotoo and legacy backward compatibility
+        if (SpectrumVisualizerPlugin.isKioskScreensaverAllowed("Kun Fotoo", true, "website"))
+            throw new AssertionError("Kun Fotoo must reject Kiosk screensavers");
+        if (!SpectrumVisualizerPlugin.isFotooAllowed("Kun Fotoo", true))
+            throw new AssertionError("Kun Fotoo must allow Fotoo dreaming");
+        if (SpectrumVisualizerPlugin.isFotooAllowed("Webside + HA Media (Familie Album & Nature Frame)", true))
+            throw new AssertionError("Kiosk screensaver combo must reject Fotoo");
+        if (!SpectrumVisualizerPlugin.isKioskScreensaverAllowed("Kiosk Satellite + Fotoo", true, "website"))
+            throw new AssertionError("Legacy Kiosk Satellite + Fotoo must allow website");
+        if (!SpectrumVisualizerPlugin.isFotooAllowed("Kiosk Satellite + Fotoo", true))
+            throw new AssertionError("Legacy Kiosk Satellite + Fotoo must allow Fotoo");
+        if (SpectrumVisualizerPlugin.isKioskScreensaverAllowed("Deaktiveret", true, "website"))
+            throw new AssertionError("Deaktiveret must reject website");
+
+        System.out.println("SpeakerSync and ScreensaverTarget regression checks passed");
     }
 }

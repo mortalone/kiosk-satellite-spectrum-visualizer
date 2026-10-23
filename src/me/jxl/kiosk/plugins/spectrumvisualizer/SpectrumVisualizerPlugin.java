@@ -60,6 +60,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     private boolean dreaming;
     private boolean kioskScreensaverActive;
     private String kioskScreensaverView = "";
+    private String overlayTarget = "Webside + HA Media (Familie Album & Nature Frame)";
     private boolean showOnKiosk = true;
     private boolean showOnFotoo = true;
     private boolean forcePreview;
@@ -256,6 +257,10 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         if ("ks.screensaver.state".equals(event)) {
             kioskScreensaverActive = Boolean.TRUE.equals(payload.get("active"));
             if (!kioskScreensaverActive) kioskScreensaverView = "";
+            if (kioskScreensaverActive) {
+                if (!mediaEntity.isEmpty()) pollEntity(mediaEntity);
+                if (!visibilityEntity.isEmpty()) pollEntity(visibilityEntity);
+            }
             main.post(this::updatePresentation);
             return;
         }
@@ -263,6 +268,10 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             Object value = payload.get("view");
             kioskScreensaverView =
                     value == null ? "" : String.valueOf(value);
+            if (kioskScreensaverActive) {
+                if (!mediaEntity.isEmpty()) pollEntity(mediaEntity);
+                if (!visibilityEntity.isEmpty()) pollEntity(visibilityEntity);
+            }
             main.post(this::updatePresentation);
             return;
         }
@@ -312,9 +321,12 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     }
 
     private void applySettings(Map<String, Object> values) {
-        String target = stringSetting(values, "overlayTarget");
-        showOnKiosk = !"Fotoo only".equals(target);
-        showOnFotoo = !"Kiosk Satellite only".equals(target);
+        overlayTarget = stringSetting(values, "overlayTarget");
+        if (overlayTarget.isEmpty()) {
+            overlayTarget = "Webside + HA Media (Familie Album & Nature Frame)";
+        }
+        showOnKiosk = isKioskScreensaverConfigured(overlayTarget);
+        showOnFotoo = isFotooConfigured(overlayTarget);
 
         String nextSource = stringSetting(values, "source");
         source = nextSource.isEmpty() ? "Animated" : nextSource;
@@ -420,12 +432,68 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         });
     }
 
+    static boolean isKioskScreensaverConfigured(String target) {
+        if (target == null) return true;
+        String t = target.trim();
+        if (t.equalsIgnoreCase("Fotoo only") || t.equalsIgnoreCase("Kun Fotoo") ||
+            t.equalsIgnoreCase("Deaktiveret") || t.equalsIgnoreCase("Off")) {
+            return false;
+        }
+        return true;
+    }
+
+    static boolean isFotooConfigured(String target) {
+        if (target == null) return false;
+        String t = target.trim();
+        if (t.equalsIgnoreCase("Deaktiveret") || t.equalsIgnoreCase("Off")) return false;
+        return t.equalsIgnoreCase("Kun Fotoo") || t.equalsIgnoreCase("Fotoo only") ||
+                t.equalsIgnoreCase("Alle screensavers (Kiosk + Fotoo)") ||
+                t.equalsIgnoreCase("Kiosk Satellite + Fotoo");
+    }
+
+    static boolean isKioskScreensaverAllowed(String target, boolean active, String view) {
+        if (!active) return false;
+        if ("black".equalsIgnoreCase(view) || "blank".equalsIgnoreCase(view)) {
+            return false;
+        }
+        if (!isKioskScreensaverConfigured(target)) return false;
+
+        String t = target == null ? "" : target.trim();
+        if (t.equalsIgnoreCase("Alle screensavers (Kiosk + Fotoo)") ||
+            t.equalsIgnoreCase("Kiosk Satellite + Fotoo") ||
+            t.equalsIgnoreCase("Alle Kiosk screensavers (uden Fotoo)") ||
+            t.equalsIgnoreCase("Kiosk Satellite only")) {
+            return true;
+        }
+
+        String v = view == null ? "" : view.toLowerCase(java.util.Locale.ROOT).trim();
+        if (v.isEmpty()) return true;
+
+        boolean isWebsite = v.contains("web") || v.contains("site");
+        boolean isMedia = v.contains("media") || v.contains("art") || v.contains("nature");
+
+        if (t.contains("Webside") && t.contains("Media")) {
+            return isWebsite || isMedia;
+        }
+        if (t.contains("Webside")) {
+            return isWebsite;
+        }
+        if (t.contains("Media")) {
+            return isMedia;
+        }
+        return true;
+    }
+
+    static boolean isFotooAllowed(String target, boolean dreaming) {
+        if (!dreaming) return false;
+        return isFotooConfigured(target);
+    }
+
     private boolean overlayActive() {
         if (partyFullscreenActive()) return false;
-        boolean kiosk = showOnKiosk && kioskScreensaverActive &&
-                !"black".equals(kioskScreensaverView) &&
-                !"blank".equals(kioskScreensaverView);
-        if (!(forcePreview || kiosk || (showOnFotoo && dreaming))) return false;
+        boolean allowedSurface = isKioskScreensaverAllowed(overlayTarget, kioskScreensaverActive, kioskScreensaverView) ||
+                isFotooAllowed(overlayTarget, dreaming);
+        if (!(forcePreview || allowedSurface)) return false;
         if (!forcePreview && !visibilityAllowed()) return false;
         if (!showOnlyWhenPlaying || mediaEntity.isEmpty()) return true;
         return "playing".equalsIgnoreCase(mediaState);
@@ -1410,7 +1478,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     }
 
     private boolean preferInAppOverlay() {
-        return showOnKiosk && kioskScreensaverActive;
+        return isKioskScreensaverAllowed(overlayTarget, kioskScreensaverActive, kioskScreensaverView);
     }
 
     private boolean addOverlayView(

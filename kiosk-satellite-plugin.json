@@ -3,7 +3,7 @@
   "apiVersion": 1,
   "id": "spectrum-visualizer-overlay",
   "name": "Spectrum Visualizer Overlay",
-  "version": "0.2.13",
+  "version": "0.2.14",
   "minAndroidSdk": 26,
   "entryClass": "me.jxl.kiosk.plugins.spectrumvisualizer.SpectrumVisualizerPlugin",
   "description": "Winamp-style spectrum overlay for Kiosk Satellite screensavers and Fotoo, with animated, microphone, and UPnP-synchronized digital Sendspin modes plus Home Assistant/time visibility rules.",
@@ -17,15 +17,19 @@
     {
       "key": "overlayTarget",
       "type": "select",
-      "title": "Show on",
-      "default": "Kiosk Satellite + Fotoo",
+      "title": "Screensaver visning",
+      "default": "Webside + HA Media (Familie Album & Nature Frame)",
       "options": [
-        "Kiosk Satellite + Fotoo",
-        "Kiosk Satellite only",
-        "Fotoo only"
+        "Webside + HA Media (Familie Album & Nature Frame)",
+        "Kun Webside (Familie Album)",
+        "Kun Home Assistant Media (Nature Frame)",
+        "Alle screensavers (Kiosk + Fotoo)",
+        "Alle Kiosk screensavers (uden Fotoo)",
+        "Kun Fotoo",
+        "Deaktiveret"
       ],
       "group": "Visualizer",
-      "description": "Choose which screensavers show the visualizer."
+      "description": "Vælg hvilke screensavers visualizeren må vises på."
     },
     {
       "key": "source",

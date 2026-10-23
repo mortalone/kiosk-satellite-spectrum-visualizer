@@ -1,3 +1,9 @@
+Spectrum Visualizer 0.2.14
+
+- Support granular screensaver selection in `overlayTarget` ("Screensaver visning"), allowing users to explicitly select between `Webside + HA Media (Familie Album & Nature Frame)`, `Kun Webside (Familie Album)`, `Kun Home Assistant Media (Nature Frame)`, `Alle screensavers (Kiosk + Fotoo)`, `Alle Kiosk screensavers (uden Fotoo)`, `Kun Fotoo`, or `Deaktiveret`.
+- Automatically re-poll and synchronize `mediaEntity` and `visibilityEntity` states on screensaver activation and view transitions so playback state is never stale when entering screensavers.
+- Retain full backward compatibility with legacy settings (`Kiosk Satellite + Fotoo`, `Kiosk Satellite only`, `Fotoo only`).
+
 Spectrum Visualizer 0.2.13
 
 - Add automatic digital UPnP/Sonos speaker buffer synchronization (`SpeakerSync`) and a bounded frame delay queue (`DelayedFrame`) so both the screensaver spectrum overlay and Party Mode fullscreen visualizations align with physical Sonos speaker output.
