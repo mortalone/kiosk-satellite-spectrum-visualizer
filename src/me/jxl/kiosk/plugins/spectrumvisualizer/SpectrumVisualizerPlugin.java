@@ -885,20 +885,23 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 } catch (Throwable ignored) {}
             }
 
-            if (peak > 2) {
-                boolean resumedAfterSilence = lastActiveSignalAtMs == 0L || (now - lastActiveSignalAtMs >= 450L);
+            // A quiet musical passage is still an active stream when AudioTrack advances.
+            boolean headAdvancing = headPos >= 0 && lastTrackHeadPos >= 0 && headPos != lastTrackHeadPos;
+            if (peak > 2 || headAdvancing) {
+                boolean resumedAfterSilence = lastActiveSignalAtMs == 0L;
                 boolean headReset = headPos >= 0 && lastTrackHeadPos > 0 && headPos + 2048 < lastTrackHeadPos;
                 if (resumedAfterSilence || headReset) {
                     speakerSync.onStreamStart(now, headSec);
                     clearDelayedFrames();
                 }
                 lastActiveSignalAtMs = now;
-                if (headPos >= 0) lastTrackHeadPos = headPos;
             } else if (lastActiveSignalAtMs > 0L && now - lastActiveSignalAtMs > 2200L) {
                 speakerSync.onStreamStop();
                 clearDelayedFrames();
                 lastActiveSignalAtMs = 0L;
             }
+
+            if (headPos >= 0) lastTrackHeadPos = headPos;
 
             persistSpeakerSyncStateIfNeeded();
 
@@ -991,7 +994,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         SpectrumView view = spectrumView;
         if (view != null && !partyAnalyzerOnly) {
             view.setLevels(bars);
-            view.postInvalidate();
+            view.postInvalidateOnAnimation();
         }
         Context app = context;
         if (app == null || !partyAnalyzerOnly || !analyzerRunning) return;
@@ -1026,7 +1029,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                         0L,
                         android.os.SystemClock.elapsedRealtime() -
                                 digitalLastFrameAtMs);
-        return "Spectrum 0.2.13 | " + source + " | " + digitalCapture + " | " + fps + " FPS | gain=" + gain +
+        return "Spectrum 0.2.15 | " + source + " | " + digitalCapture + " | " + fps + " FPS | gain=" + gain +
                     "\n" + trackInfo +
                     "; attachedSession=" + digitalAudioSessionId +
                     "; systemMix=" + digitalUsingSystemMix +
@@ -1511,7 +1514,8 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                        | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                 PixelFormat.TRANSLUCENT);
         params.gravity = gravity;
         params.y = yOffset;
@@ -1738,6 +1742,9 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         private int midColor = Color.rgb(250, 204, 21);
         private int highColor = Color.rgb(239, 68, 68);
         private int peakColor = Color.WHITE;
+        private Shader classicShader;
+        private int gradientHeight = -1;
+        private int[] rainbow = new int[0];
 
         SpectrumView(Context context) {
             super(context);
@@ -1757,6 +1764,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             midColor = mid;
             highColor = high;
             peakColor = peak;
+            classicShader = null;
             invalidate();
         }
 
@@ -1779,8 +1787,8 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                     (getWidth() - gap * (incoming.length - 1)) / incoming.length;
             float usable = getHeight() - 8f;
 
-            Shader classicShader = null;
-            if ("Classic Winamp".equals(colorMode)) {
+            if ("Classic Winamp".equals(colorMode) && (classicShader == null || gradientHeight != getHeight())) {
+                gradientHeight = getHeight();
                 // The gradient is tied to level height: short/quiet bars stay
                 // green, medium bars reach yellow, and loud bars reach red.
                 classicShader = new LinearGradient(
@@ -1807,10 +1815,15 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 if ("Classic Winamp".equals(colorMode)) {
                     paint.setShader(classicShader);
                 } else if ("Rainbow".equals(colorMode)) {
-                    float hue = incoming.length <= 1
-                            ? 0f
-                            : (i * 300f / (incoming.length - 1));
-                    paint.setColor(Color.HSVToColor(new float[] {hue, 0.88f, 1f}));
+                    if (rainbow.length != incoming.length) {
+                        rainbow = new int[incoming.length];
+                        float[] hsv = {0f, .88f, 1f};
+                        for (int j = 0; j < rainbow.length; j++) {
+                            hsv[0] = rainbow.length <= 1 ? 0f : j * 300f / (rainbow.length - 1);
+                            rainbow[j] = Color.HSVToColor(hsv);
+                        }
+                    }
+                    paint.setColor(rainbow[i]);
                 } else if ("Level heat".equals(colorMode)) {
                     paint.setColor(levelColor(
                             smoothed[i], lowColor, midColor, highColor));

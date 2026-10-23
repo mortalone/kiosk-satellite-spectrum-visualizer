@@ -251,8 +251,12 @@ public final class SpeakerSync {
                 if (snap.relTimeSeconds >= 0 && snap.relTimeSeconds <= 20) {
                     int locked = measureTickFlip(target.ip, snap);
                     if (locked >= MIN_VALID_DELAY_MS && locked <= MAX_VALID_DELAY_MS) {
-                        measuredDelayMs = locked;
-                        fallbackUgpDelayMs = locked;
+                        // Match Twinkly's jitter deadband: do not shift queued frames
+                        // for small UPnP/network measurement fluctuations.
+                        if (!"LOCKED".equals(state) || Math.abs(locked - measuredDelayMs) >= 150) {
+                            measuredDelayMs = locked;
+                            fallbackUgpDelayMs = locked;
+                        }
                         state = "LOCKED";
                         sleepMs(2000L);
                         continue;

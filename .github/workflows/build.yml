@@ -24,6 +24,8 @@ jobs:
         run: |
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -1)
           yes | "$SDKMANAGER" "platforms;android-35" >/dev/null
+      - name: Verify silent-passage synchronization
+        run: python3 tools/test_stream_continuity.py
       - name: Build plugin
         run: python3 tools/build.py --android-platform 35
       - name: Verify read-only audio registry discovery
