@@ -169,12 +169,36 @@ public final class SpeakerSync {
         return discoveredSpeakers;
     }
 
+    private volatile long lastMeasureAtMs = 0L;
+
     public synchronized void onStreamStart(long startedAtMs, double audioTrackHeadSeconds) {
-        this.streamStartAtMs = startedAtMs;
-        this.streamStartHeadSeconds = audioTrackHeadSeconds;
+        if (!Double.isNaN(audioTrackHeadSeconds) && audioTrackHeadSeconds > 0.0) {
+            this.streamStartAtMs = startedAtMs - (long) (audioTrackHeadSeconds * 1000.0);
+            this.streamStartHeadSeconds = audioTrackHeadSeconds;
+        } else {
+            this.streamStartAtMs = startedAtMs;
+            this.streamStartHeadSeconds = Double.isNaN(audioTrackHeadSeconds) ? 0.0 : audioTrackHeadSeconds;
+        }
         this.lastRelSeconds = -1;
+        this.lastMeasureAtMs = 0L;
         if (!isOffSpec(targetSpec)) {
             this.state = "MEASURING";
+        }
+    }
+
+    public synchronized void updateStreamPosition(long nowMs, double audioTrackHeadSeconds) {
+        if (Double.isNaN(audioTrackHeadSeconds) || audioTrackHeadSeconds <= 0.0) return;
+        this.streamStartHeadSeconds = audioTrackHeadSeconds;
+        long computedStart = nowMs - (long) (audioTrackHeadSeconds * 1000.0);
+        if (this.streamStartAtMs <= 0L) {
+            this.streamStartAtMs = computedStart;
+        } else {
+            long diff = computedStart - this.streamStartAtMs;
+            if (Math.abs(diff) > 2000L) {
+                this.streamStartAtMs = computedStart;
+            } else if (Math.abs(diff) > 10L) {
+                this.streamStartAtMs += (long) Math.signum(diff);
+            }
         }
     }
 
@@ -182,6 +206,7 @@ public final class SpeakerSync {
         this.streamStartAtMs = 0L;
         this.streamStartHeadSeconds = Double.NaN;
         this.lastRelSeconds = -1;
+        this.lastMeasureAtMs = 0L;
         if (!isOffSpec(targetSpec)) {
             this.state = "IDLE";
         }
@@ -240,31 +265,36 @@ public final class SpeakerSync {
                     continue;
                 }
 
-                // If speaker just started a new stream or reset RelTime to 0..1
+                // If speaker just started a new stream or URI changed, trigger immediate re-measurement
                 if (!snap.trackUri.equals(lastTrackUri) ||
                         (lastRelSeconds > 2 && snap.relTimeSeconds >= 0 && snap.relTimeSeconds <= 1)) {
                     lastTrackUri = snap.trackUri;
                     lastRelSeconds = snap.relTimeSeconds;
+                    lastMeasureAtMs = 0L;
                 }
 
-                // Measure exact sub-second RelTime flip when within the initial window
-                if (snap.relTimeSeconds >= 0 && snap.relTimeSeconds <= 20) {
+                // Continuous sub-second RelTime measurement:
+                // Active when not locked, or periodically every 25 seconds to track drift,
+                // or immediately after a track / URI transition.
+                boolean dueForMeasurement = !"LOCKED".equals(state) || (now - lastMeasureAtMs > 25000L);
+                if (snap.relTimeSeconds >= 0 && streamStartAtMs > 0L && dueForMeasurement) {
                     int locked = measureTickFlip(target.ip, snap);
                     if (locked >= MIN_VALID_DELAY_MS && locked <= MAX_VALID_DELAY_MS) {
                         // Match Twinkly's jitter deadband: do not shift queued frames
-                        // for small UPnP/network measurement fluctuations.
+                        // for small UPnP/network measurement fluctuations (< 150 ms).
                         if (!"LOCKED".equals(state) || Math.abs(locked - measuredDelayMs) >= 150) {
                             measuredDelayMs = locked;
                             fallbackUgpDelayMs = locked;
                         }
                         state = "LOCKED";
+                        lastMeasureAtMs = clockMs.getAsLong();
                         sleepMs(2000L);
                         continue;
                     }
                 }
 
                 // Mid-stream fallback: if Sonos is playing a Music Assistant UGP stream and we
-                // attached after the first 20 seconds, apply the last verified UGP buffer delay.
+                // haven't locked yet, apply the last verified UGP buffer delay.
                 if (snap.isMaStream && measuredDelayMs <= 0) {
                     measuredDelayMs = fallbackUgpDelayMs;
                     state = "ESTIMATED";

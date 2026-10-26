@@ -71,6 +71,12 @@ public final class SpeakerSyncTest {
         if (sync.getEffectiveDelayMs() != 120)
             throw new AssertionError("Expected manual offset only when target is off");
 
+        SpeakerSync syncMid = new SpeakerSync(fakeClockMs::get);
+        syncMid.onStreamStart(50000L, 40.0);
+        syncMid.updateStreamPosition(52000L, 42.0);
+        if (!"MEASURING".equals(syncMid.getState()))
+            throw new AssertionError("Expected MEASURING state on stream start with head offset");
+
         // Verify granular screensaver targeting
         String combo = "Webside + HA Media (Familie Album & Nature Frame)";
         if (!SpectrumVisualizerPlugin.isKioskScreensaverAllowed(combo, true, "website"))

@@ -893,6 +893,8 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 if (resumedAfterSilence || headReset) {
                     speakerSync.onStreamStart(now, headSec);
                     clearDelayedFrames();
+                } else if (!Double.isNaN(headSec) && headSec > 0.0) {
+                    speakerSync.updateStreamPosition(now, headSec);
                 }
                 lastActiveSignalAtMs = now;
             } else if (lastActiveSignalAtMs > 0L && now - lastActiveSignalAtMs > 2200L) {
@@ -1029,7 +1031,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                         0L,
                         android.os.SystemClock.elapsedRealtime() -
                                 digitalLastFrameAtMs);
-        return "Spectrum 0.2.15 | " + source + " | " + digitalCapture + " | " + fps + " FPS | gain=" + gain +
+        return "Spectrum 0.2.17 | " + source + " | " + digitalCapture + " | " + fps + " FPS | gain=" + gain +
                     "\n" + trackInfo +
                     "; attachedSession=" + digitalAudioSessionId +
                     "; systemMix=" + digitalUsingSystemMix +
