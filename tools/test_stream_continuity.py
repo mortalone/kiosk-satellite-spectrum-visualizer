@@ -6,7 +6,7 @@ start = source.index("            // A quiet musical passage")
 end = source.index("            persistSpeakerSyncStateIfNeeded();", start)
 block = source[start:end]
 java = """public class StreamContinuityTest {
- static class Sync {int starts, stops; void onStreamStart(long n,double h){starts++;} void onStreamStop(){stops++;}}
+ static class Sync {int starts, stops, updates; void onStreamStart(long n,double h){starts++;} void updateStreamPosition(long n,double h){updates++;} void onStreamStop(){stops++;}}
  final Sync speakerSync=new Sync(); long lastActiveSignalAtMs; int lastTrackHeadPos=-1, clears;
  void clearDelayedFrames(){clears++;}
  void frame(long now,int headPos,int peak){double headSec=headPos/48000.0;
