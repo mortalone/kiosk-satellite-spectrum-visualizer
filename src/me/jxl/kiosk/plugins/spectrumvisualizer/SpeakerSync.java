@@ -40,9 +40,9 @@ import java.util.regex.Pattern;
  * Sendspin stream and physical Sonos playback via UPnP RelTime second-flips.
  */
 public final class SpeakerSync {
-    public static final int DEFAULT_UGP_DELAY_MS = 3980;
-    public static final int MIN_VALID_DELAY_MS = 200;
-    public static final int MAX_VALID_DELAY_MS = 10000;
+    public static final int DEFAULT_UGP_DELAY_MS = 3750;
+    public static final int MIN_VALID_DELAY_MS = 1500;
+    public static final int MAX_VALID_DELAY_MS = 4600;
 
     private static final Pattern ZONE_GROUP_PATTERN = Pattern.compile(
             "<ZoneGroup\\b([^>]*)>(.*?)</ZoneGroup>", Pattern.DOTALL);
