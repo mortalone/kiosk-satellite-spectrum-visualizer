@@ -1,3 +1,9 @@
+# 0.2.21
+
+- **Gendannet `SCALING_MODE_NORMALIZED` for Sendspin**: Rettet fejl hvor `SCALING_MODE_AS_PLAYED` gav 0 i amplitude på Raspberry Pi/kiosk-enheder, fordi den lokale højttalervolumen er sat til 0 (musikken afspilles via netværk til Sonos).
+- **Home Assistant Media Player Lydstyrkeskalering**: Når "Følg volumen" er valgt, skaleres søjlerne nu direkte efter afspillerens reelle volumen i Home Assistant (`volume_level`), mens "Normaliseret" automatisk leverer fuldt og levende udslag uanset om der høres lav (f.eks. 4%) eller høj musik.
+- **Renset Støjtærskel**: Pauser og stilhed detekteres fejlfrit uden at blokere for lav baggrundsmusik.
+
 # 0.2.20
 
 - **Amplitudeskalering (Normaliseret vs Følg volumen)**: Tilføjet indstilling til at vælge mellem intelligent dynamisk normalisering (AGC) og direkte lydstyrkevisning ("Følg volumen").

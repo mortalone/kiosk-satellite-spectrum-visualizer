@@ -86,6 +86,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     private String mediaEntity = "";
     private boolean showOnlyWhenPlaying = true;
     private String mediaState = "";
+    private volatile float mediaVolume = 1.0f;
     private String visibilityEntity = "";
     private String visibilityCondition = "Always";
     private String visibilityValue = "";
@@ -162,7 +163,9 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         try {
             long age = digitalLastFrameAtMs <= 0 ? -1 : Math.max(0L, android.os.SystemClock.elapsedRealtime() - digitalLastFrameAtMs);
             String syncStr = speakerSync != null ? (speakerSync.getState() + "|" + speakerSync.getActiveSpeakerName() + "|" + speakerSync.getEffectiveDelayMs() + "ms") : "none";
-            String scaleStr = "Følg volumen (som spillet)".equals(amplitudeScaling) ? "Volumen" : String.format(java.util.Locale.ROOT, "Norm (AGC: %.0f)", agcPeak);
+            String scaleStr = "Følg volumen (som spillet)".equals(amplitudeScaling)
+                    ? String.format(java.util.Locale.ROOT, "Volumen (%.0f%%)", mediaVolume * 100f)
+                    : "Normaliseret";
             String summary = String.format(java.util.Locale.ROOT,
                     "Kilde: %s | Skalering: %s | Session: %d | Delay: %s | Alder: %dms | Peak: %d (RMS: %.1f) | Overlay: %s | Media: %s (%s)",
                     source,
@@ -336,6 +339,13 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             boolean changed = false;
             if (!mediaEntity.isEmpty() && mediaEntity.equals(entity)) {
                 mediaState = state;
+                Object attrs = payload.get("attributes");
+                if (attrs instanceof Map) {
+                    Object vol = ((Map<?, ?>) attrs).get("volume_level");
+                    if (vol instanceof Number) {
+                        mediaVolume = ((Number) vol).floatValue();
+                    }
+                }
                 changed = true;
             }
             if (!visibilityEntity.isEmpty() && visibilityEntity.equals(entity)) {
@@ -479,9 +489,19 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         args.put("entityId", entity);
         host.executeCommand("getHaEntityState", args, (ok, data, error) -> {
             if (!ok || !(data instanceof Map)) return;
-            Object stateValue = ((Map<?, ?>) data).get("state");
+            Map<?, ?> map = (Map<?, ?>) data;
+            Object stateValue = map.get("state");
             String state = stateValue == null ? "" : String.valueOf(stateValue);
-            if (entity.equals(mediaEntity)) mediaState = state;
+            if (entity.equals(mediaEntity)) {
+                mediaState = state;
+                Object attrs = map.get("attributes");
+                if (attrs instanceof Map) {
+                    Object vol = ((Map<?, ?>) attrs).get("volume_level");
+                    if (vol instanceof Number) {
+                        mediaVolume = ((Number) vol).floatValue();
+                    }
+                }
+            }
             if (entity.equals(visibilityEntity)) visibilityState = state;
             main.post(this::updatePresentation);
         });
@@ -868,7 +888,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 capture = Math.max(range[0], Math.min(range[1], 1024));
             }
             vis.setCaptureSize(capture);
-            vis.setScalingMode(Visualizer.SCALING_MODE_AS_PLAYED);
+            vis.setScalingMode(Visualizer.SCALING_MODE_NORMALIZED);
             vis.setEnabled(true);
 
             digitalVisualizer = vis;
@@ -962,26 +982,20 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
 
             persistSpeakerSyncStateIfNeeded();
 
-            boolean isSilent = peak < 3 || digitalWaveformRms < 1.8;
+            boolean isSilent = peak <= 2 || digitalWaveformRms < 1.0;
             float[] bars;
             float[] wave = new float[Math.min(128, digitalWaveform.length)];
             if (isSilent) {
                 bars = new float[barCount];
-                agcPeak = Math.max(16.0f, agcPeak * 0.90f);
             } else {
-                if (peak > agcPeak) {
-                    agcPeak = peak;
-                } else {
-                    agcPeak = Math.max(16.0f, agcPeak * 0.96f + peak * 0.04f);
-                }
-                float normFactor = 1.0f;
-                if (!"Følg volumen (som spillet)".equals(amplitudeScaling)) {
-                    normFactor = Math.min(5.5f, 105.0f / Math.max(18.0f, agcPeak));
-                }
                 bars = waveformSpectrumBars(
-                        digitalWaveform, samplingRate, barCount, analyzerGain(), normFactor);
+                        digitalWaveform, samplingRate, barCount, analyzerGain(), 1.0f);
+                if ("Følg volumen (som spillet)".equals(amplitudeScaling)) {
+                    float vFactor = Math.max(0.08f, Math.min(1.0f, mediaVolume));
+                    for (int i = 0; i < bars.length; i++) bars[i] *= vFactor;
+                }
                 for (int i = 0; i < wave.length; i++) {
-                    wave[i] = (((digitalWaveform[i * digitalWaveform.length / wave.length] & 0xff) - 128) / 128f) * normFactor;
+                    wave[i] = ((digitalWaveform[i * digitalWaveform.length / wave.length] & 0xff) - 128) / 128f;
                 }
             }
             publishDigitalFrame(bars, wave, now);
