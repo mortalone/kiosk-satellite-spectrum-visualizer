@@ -1,3 +1,10 @@
+# 0.2.20
+
+- **Amplitudeskalering (Normaliseret vs Følg volumen)**: Tilføjet indstilling til at vælge mellem intelligent dynamisk normalisering (AGC) og direkte lydstyrkevisning ("Følg volumen").
+- **Støjtærskel & Stilhedssquelch (Bars til 0 ved pauser)**: Rettet fejl hvor Androids hardware `Visualizer.SCALING_MODE_NORMALIZED` forstærkede ubetydelig baggrundsstøj/dither i stille passager til fuld udslag (peak 127). Skiftet til `SCALING_MODE_AS_PLAYED` med software AGC og streng støjtærskel, så søjlerne falder rent til 0 under pauser og svage passager i stedet for at stå fast på fuld højde.
+- **Signal-Skaleret Frekvenstilt & Equalizing**: Justeret frekvensspektret med en signal-afhængig akustisk pink-noise kompensation, så dyb bas, vokal og diskant har samme balancerede energiniveau uden at løfte støjbunden.
+- **Global Broadcast**: `PARTY_AUDIO_FRAME` udsendes nu kontinuerligt under analyse, så både Music Screensaver, Party Mode og sangtekst-waveform altid modtager korrekte, dynamiske lyddata.
+
 # 0.2.19
 
 - **Musical Frequency Tilt & Equalization**: Integrated progressive +14 dB treble tilt across the spectrum bars to compensate for natural acoustic pink-noise rolloff. Highs, snares, and cymbals now dance actively alongside the kick bass instead of appearing flat or muted.

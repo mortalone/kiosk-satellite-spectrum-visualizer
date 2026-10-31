@@ -74,6 +74,9 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
     private int barCount = 32;
     private volatile int fps = 20;
     private int gain = 3;
+    private String amplitudeScaling = "Normaliseret (automatisk tilpasning)";
+    private float agcPeak = 64.0f;
+    private float micAgcPeak = 8000.0f;
     private String colorMode = "Classic Winamp";
     private int singleColor = Color.WHITE;
     private int lowColor = Color.rgb(34, 197, 94);
@@ -159,9 +162,11 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         try {
             long age = digitalLastFrameAtMs <= 0 ? -1 : Math.max(0L, android.os.SystemClock.elapsedRealtime() - digitalLastFrameAtMs);
             String syncStr = speakerSync != null ? (speakerSync.getState() + "|" + speakerSync.getActiveSpeakerName() + "|" + speakerSync.getEffectiveDelayMs() + "ms") : "none";
+            String scaleStr = "Følg volumen (som spillet)".equals(amplitudeScaling) ? "Volumen" : String.format(java.util.Locale.ROOT, "Norm (AGC: %.0f)", agcPeak);
             String summary = String.format(java.util.Locale.ROOT,
-                    "Kilde: %s | Session: %d | Delay: %s | Alder: %dms | Peak: %d (RMS: %.1f) | Overlay: %s | Media: %s (%s)",
+                    "Kilde: %s | Skalering: %s | Session: %d | Delay: %s | Alder: %dms | Peak: %d (RMS: %.1f) | Overlay: %s | Media: %s (%s)",
                     source,
+                    scaleStr,
                     digitalAudioSessionId,
                     syncStr,
                     age,
@@ -247,8 +252,21 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             setSyncOffsetPref(0);
         } else if ("syncPlus100".equals(command)) {
             stepSyncOffsetPref(100);
+        } else if ("scaleNormalized".equals(command)) {
+            setAmplitudeScalingPref("Normaliseret (automatisk tilpasning)");
+        } else if ("scaleAsPlayed".equals(command)) {
+            setAmplitudeScalingPref("Følg volumen (som spillet)");
         } else {
             throw new IllegalArgumentException("Unknown command: " + command);
+        }
+    }
+
+    private void setAmplitudeScalingPref(String mode) {
+        amplitudeScaling = mode;
+        context.getSharedPreferences("spectrum_visualizer_preferences", Context.MODE_PRIVATE)
+                .edit().putString("amplitude_scaling", mode).apply();
+        if (host != null) {
+            host.status("Amplitudeskalering: " + mode + " (gemt).", false);
         }
     }
 
@@ -394,13 +412,16 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         barCount = intSetting(values, "barCount", 32, 8, 64);
         fps = Math.max(5, Math.min(30, visPrefs.getInt("fps", 20)));
         gain = intSetting(values, "gain", 3, 1, 10);
+        String savedScaling = visPrefs.getString("amplitude_scaling", "Normaliseret (automatisk tilpasning)");
+        String nextScaling = stringSetting(values, "amplitudeScaling");
+        amplitudeScaling = nextScaling.isEmpty() ? savedScaling : nextScaling;
         String nextColorMode = stringSetting(values, "colorMode");
         colorMode = nextColorMode.isEmpty() ? "Classic Winamp" : nextColorMode;
-        singleColor = colorSetting(values, "singleColor", Color.WHITE);
+        peakColor = colorSetting(values, "peakColor", Color.WHITE);
+        singleColor = colorSetting(values, "singleColor", peakColor);
         lowColor = colorSetting(values, "lowColor", Color.rgb(34, 197, 94));
         midColor = colorSetting(values, "midColor", Color.rgb(250, 204, 21));
         highColor = colorSetting(values, "highColor", Color.rgb(239, 68, 68));
-        peakColor = colorSetting(values, "peakColor", Color.WHITE);
         mediaEntity = stringSetting(values, "mediaEntity");
         showOnlyWhenPlaying =
                 values.get("showOnlyWhenPlaying") == null ||
@@ -847,7 +868,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 capture = Math.max(range[0], Math.min(range[1], 1024));
             }
             vis.setCaptureSize(capture);
-            vis.setScalingMode(Visualizer.SCALING_MODE_NORMALIZED);
+            vis.setScalingMode(Visualizer.SCALING_MODE_AS_PLAYED);
             vis.setEnabled(true);
 
             digitalVisualizer = vis;
@@ -941,10 +962,28 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
 
             persistSpeakerSyncStateIfNeeded();
 
-            float[] bars = waveformSpectrumBars(
-                    digitalWaveform, samplingRate, barCount, analyzerGain());
+            boolean isSilent = peak < 3 || digitalWaveformRms < 1.8;
+            float[] bars;
             float[] wave = new float[Math.min(128, digitalWaveform.length)];
-            for (int i = 0; i < wave.length; i++) wave[i] = ((digitalWaveform[i * digitalWaveform.length / wave.length] & 0xff) - 128) / 128f;
+            if (isSilent) {
+                bars = new float[barCount];
+                agcPeak = Math.max(16.0f, agcPeak * 0.90f);
+            } else {
+                if (peak > agcPeak) {
+                    agcPeak = peak;
+                } else {
+                    agcPeak = Math.max(16.0f, agcPeak * 0.96f + peak * 0.04f);
+                }
+                float normFactor = 1.0f;
+                if (!"Følg volumen (som spillet)".equals(amplitudeScaling)) {
+                    normFactor = Math.min(5.5f, 105.0f / Math.max(18.0f, agcPeak));
+                }
+                bars = waveformSpectrumBars(
+                        digitalWaveform, samplingRate, barCount, analyzerGain(), normFactor);
+                for (int i = 0; i < wave.length; i++) {
+                    wave[i] = (((digitalWaveform[i * digitalWaveform.length / wave.length] & 0xff) - 128) / 128f) * normFactor;
+                }
+            }
             publishDigitalFrame(bars, wave, now);
             return true;
         } catch (Throwable error) {
@@ -1033,7 +1072,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             view.postInvalidateOnAnimation();
         }
         Context app = context;
-        if (app == null || !partyAnalyzerOnly || !analyzerRunning) return;
+        if (app == null || !analyzerRunning) return;
         Intent frame = new Intent("me.jxl.kiosk.plugins.PARTY_AUDIO_FRAME").setPackage(app.getPackageName());
         frame.putExtra("bands", bars);
         frame.putExtra("waveform", waveform);
@@ -1152,7 +1191,8 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
             byte[] waveform,
             int samplingRateMilliHz,
             int bars,
-            int gain) {
+            int gain,
+            float normFactor) {
         int sourceN = waveform.length;
         int n = 1;
         while ((n << 1) <= sourceN && (n << 1) <= 2048) n <<= 1;
@@ -1167,7 +1207,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         double[] imag = new double[n];
         for (int i = 0; i < n; i++) {
             // Android Visualizer waveform is unsigned PCM8 centered at 128.
-            double sample = ((waveform[i] & 0xFF) - 128) / 128.0;
+            double sample = (((waveform[i] & 0xFF) - 128) / 128.0) * normFactor;
             double window =
                     0.5 - 0.5 * Math.cos(2.0 * Math.PI * i / (n - 1));
             real[i] = sample * window;
@@ -1428,18 +1468,42 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 }
                 if (offset < fftSize) continue;
 
+                int micPeak = 0;
+                double micSumSq = 0;
                 for (int i = 0; i < fftSize; i++) {
-                    double window =
-                            0.5 - 0.5 * Math.cos(2.0 * Math.PI * i / (fftSize - 1));
-                    real[i] = (pcm[i] / 32768.0) * window;
-                    imag[i] = 0;
+                    int s = Math.abs(pcm[i]);
+                    if (s > micPeak) micPeak = s;
+                    micSumSq += s * s;
                 }
-                fft(real, imag);
+                double micRms = Math.sqrt(micSumSq / fftSize);
+                boolean micSilent = micPeak < 300 || micRms < 180.0;
 
-                float[] bars = spectrumBars(real, imag, sampleRate, barCount, analyzerGain());
-                float[] wave = new float[Math.min(128, pcm.length)];
-                for (int i = 0; i < wave.length; i++) wave[i] = pcm[i * pcm.length / wave.length] / 32768f;
-                publishFrame(bars, wave, false);
+                if (micSilent) {
+                    micAgcPeak = Math.max(1500f, micAgcPeak * 0.90f);
+                    publishFrame(new float[barCount], new float[0], false);
+                } else {
+                    if (micPeak > micAgcPeak) {
+                        micAgcPeak = micPeak;
+                    } else {
+                        micAgcPeak = Math.max(1500f, micAgcPeak * 0.96f + micPeak * 0.04f);
+                    }
+                    float normFactor = 1.0f;
+                    if (!"Følg volumen (som spillet)".equals(amplitudeScaling)) {
+                        normFactor = Math.min(5.5f, 22000.0f / Math.max(2000f, micAgcPeak));
+                    }
+                    for (int i = 0; i < fftSize; i++) {
+                        double window =
+                                0.5 - 0.5 * Math.cos(2.0 * Math.PI * i / (fftSize - 1));
+                        real[i] = ((pcm[i] / 32768.0) * normFactor) * window;
+                        imag[i] = 0;
+                    }
+                    fft(real, imag);
+
+                    float[] bars = spectrumBars(real, imag, sampleRate, barCount, analyzerGain());
+                    float[] wave = new float[Math.min(128, pcm.length)];
+                    for (int i = 0; i < wave.length; i++) wave[i] = (pcm[i * pcm.length / wave.length] / 32768f) * normFactor;
+                    publishFrame(bars, wave, false);
+                }
                 sleep(Math.max(33L, 1000L / Math.max(1, analyzerFps())));
             }
             return true;
@@ -1463,6 +1527,10 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         float[] result = new float[bars];
         double minHz = 45.0;
         double maxHz = Math.min(16000.0, sampleRate / 2.0);
+        double floorDb = -38.0;
+        double rangeDb = 38.0;
+        double gainMult = 0.75 + gain * 0.12;
+
         for (int b = 0; b < bars; b++) {
             double lowHz = minHz * Math.pow(maxHz / minHz, b / (double) bars);
             double highHz = minHz * Math.pow(maxHz / minHz, (b + 1) / (double) bars);
@@ -1474,13 +1542,19 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 if (mag > peak) peak = mag;
             }
             double db = 20.0 * Math.log10(Math.max(1e-8, peak));
-            // Progressive musical tilt across the spectrum (+14 dB boost from lowest bass to highest treble)
-            // Compensates for natural acoustic pink-noise rolloff so mids and highs dance as lively as bass
+            if (db <= floorDb) {
+                result[b] = 0f;
+                continue;
+            }
+            double signalFraction = (db - floorDb) / rangeDb;
+            // Progressive musical tilt across the spectrum (+40% boost from lowest bass to highest treble)
+            // Compensates for natural acoustic pink-noise rolloff so mids and highs dance as lively as bass,
+            // while scaling with signalFraction so quiet passages and floor noise are never amplified.
             double freqFraction = b / (double) Math.max(1, bars - 1);
-            double tiltDb = freqFraction * 14.0;
-            double normalized = (db + 58.0 + tiltDb) / 58.0;
-            normalized *= (0.75 + gain * 0.22);
-            result[b] = clamp01((float) normalized);
+            double tiltBoost = freqFraction * 0.40 * signalFraction;
+            double norm = (signalFraction + tiltBoost) * gainMult;
+            norm = Math.pow(Math.max(0.0, norm), 1.25);
+            result[b] = clamp01((float) norm);
         }
         return result;
     }
@@ -1849,7 +1923,10 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 smoothed[i] = target > smoothed[i]
                         ? smoothed[i] * 0.35f + target * 0.65f
                         : smoothed[i] * 0.82f + target * 0.18f;
+                if (smoothed[i] < 0.005f) smoothed[i] = 0f;
                 peaks[i] = Math.max(smoothed[i], peaks[i] - 0.025f);
+                if (peaks[i] < 0.005f) peaks[i] = 0f;
+                if (smoothed[i] <= 0f && peaks[i] <= 0f) continue;
 
                 paint.setShader(null);
                 if ("Classic Winamp".equals(colorMode)) {
