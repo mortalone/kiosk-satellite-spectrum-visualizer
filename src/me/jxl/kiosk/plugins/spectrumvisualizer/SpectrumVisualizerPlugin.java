@@ -146,6 +146,38 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         }
     };
 
+    private final Runnable telemetryTick = new Runnable() {
+        @Override public void run() {
+            if (host == null) return;
+            publishTelemetry();
+            main.postDelayed(this, 1000L);
+        }
+    };
+
+    private void publishTelemetry() {
+        if (host == null) return;
+        try {
+            long age = digitalLastFrameAtMs <= 0 ? -1 : Math.max(0L, android.os.SystemClock.elapsedRealtime() - digitalLastFrameAtMs);
+            String syncStr = speakerSync != null ? (speakerSync.getState() + "|" + speakerSync.getActiveSpeakerName() + "|" + speakerSync.getEffectiveDelayMs() + "ms") : "none";
+            String summary = String.format(java.util.Locale.ROOT,
+                    "Kilde: %s | Session: %d | Delay: %s | Alder: %dms | Peak: %d (RMS: %.1f) | Overlay: %s | Media: %s (%s)",
+                    source,
+                    digitalAudioSessionId,
+                    syncStr,
+                    age,
+                    digitalWaveformPeak,
+                    digitalWaveformRms,
+                    overlayActive() ? "aktiv" : "skjult",
+                    mediaEntity.isEmpty() ? "ingen" : mediaEntity,
+                    mediaState.isEmpty() ? "ukendt" : mediaState);
+            host.publishTextSensor("telemetry", "Spectrum Telemetri", summary);
+            if (speakerSync != null) {
+                host.publishTextSensor("audio_sync", "Lydsynkronisering",
+                        speakerSync.getState() + "|" + speakerSync.getActiveSpeakerName() + "|" + speakerSync.getEffectiveDelayMs());
+            }
+        } catch (Throwable ignored) {}
+    }
+
     @Override
     public synchronized void start(PluginHost host, Map<String, Object> settings) {
         this.host = host;
@@ -168,6 +200,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         host.subscribe("screensaver.view");
         applySettings(settings);
         readInitialScreensaverState();
+        main.post(telemetryTick);
         host.status("Ready. Spectrum visualizer follows the selected screensavers.", false);
     }
 
@@ -311,6 +344,7 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
         main.removeCallbacks(analyzerRetry);
         main.removeCallbacks(partyWatchdog);
         main.removeCallbacks(debugTick);
+        main.removeCallbacks(telemetryTick);
         main.post(() -> {
             hideVisualizer();
             removeOverlayView(debugView);
@@ -1440,8 +1474,12 @@ public final class SpectrumVisualizerPlugin implements KioskPlugin {
                 if (mag > peak) peak = mag;
             }
             double db = 20.0 * Math.log10(Math.max(1e-8, peak));
-            double normalized = (db + 62.0) / 62.0;
-            normalized *= (0.65 + gain * 0.18);
+            // Progressive musical tilt across the spectrum (+14 dB boost from lowest bass to highest treble)
+            // Compensates for natural acoustic pink-noise rolloff so mids and highs dance as lively as bass
+            double freqFraction = b / (double) Math.max(1, bars - 1);
+            double tiltDb = freqFraction * 14.0;
+            double normalized = (db + 58.0 + tiltDb) / 58.0;
+            normalized *= (0.75 + gain * 0.22);
             result[b] = clamp01((float) normalized);
         }
         return result;

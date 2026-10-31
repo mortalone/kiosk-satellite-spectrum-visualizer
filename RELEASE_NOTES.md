@@ -1,3 +1,12 @@
+# 0.2.19
+
+- **Musical Frequency Tilt & Equalization**: Integrated progressive +14 dB treble tilt across the spectrum bars to compensate for natural acoustic pink-noise rolloff. Highs, snares, and cymbals now dance actively alongside the kick bass instead of appearing flat or muted.
+- **Home Assistant Telemetry & Entities Capability**: Added `entities` capability to manifest and published live diagnostic sensors `sensor.raspberry_raspberry_pi_4_spectrum_visualizer_telemetri` and `sensor.raspberry_raspberry_pi_4_spectrum_visualizer_lydsynkronisering` to Home Assistant for effortless observability of session ID, signal RMS, delay, and age.
+
+# 0.2.18
+
+- Clamped UPnP speaker delay to realistic 1500–4600ms range, preventing bogus multi-second buffer delay locks.
+
 # 0.2.17
 
 Automatic continuous Sonos UPnP buffer synchronization: remove the 20-second RelTime restriction to support continuous UGP radio streams (where Sonos RelTime counts indefinitely). Compute stream start from Android AudioTrack playback head position (`headSec`) so screensaver activation mid-song stays precisely anchored. Automatically re-measure and track buffer delay on track changes and periodic intervals without manual adjustment.
